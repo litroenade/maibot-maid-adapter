@@ -1,0 +1,53 @@
+# Python 运行缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 本地虚拟环境与工具缓存
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+
+# 本地运行配置与自动备份
+config.toml
+config_back/
+*.local.toml
+*.bak
+*.backup
+
+# 环境变量与密钥
+.env
+.env.*
+
+# 运行日志与临时文件
+log/
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+
+# 打包产物
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# 编辑器与系统文件
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 配置模板允许提交
+!config.example.toml
+!config.template.toml
+!*.template.toml

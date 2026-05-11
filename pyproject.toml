@@ -1,0 +1,9 @@
+[project]
+name = "maibot-maid-adapter"
+version = "0.1.0"
+description = "MaiBot 女仆适配器，用于接入 TouhouLittleMaid 和 MaidBridge WebSocket"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.9",
+]
