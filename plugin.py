@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any, ClassVar
 
-from maibot_sdk import MaiBotPlugin, PluginConfigBase
+from maibot_sdk import MaiBotPlugin, ON_BOT_CONFIG_RELOAD, PluginConfigBase
 
 from .config import MaiBotMaidAdapterSettings
 from .src.adapter import MaidBridgeMaidPlugin
@@ -13,6 +13,7 @@ from .src.transport import BridgeTransport
 
 class MaiBotMaidAdapterPlugin(MaidBridgeMaidPlugin, MaiBotPlugin):
     config_model: ClassVar[type[PluginConfigBase] | None] = MaiBotMaidAdapterSettings
+    config_reload_subscriptions: ClassVar[set[str]] = {ON_BOT_CONFIG_RELOAD}
 
     def __init__(
         self,
@@ -29,6 +30,7 @@ class MaiBotMaidAdapterPlugin(MaidBridgeMaidPlugin, MaiBotPlugin):
         self._reconnect_task: asyncio.Task[None] | None = None
         self._reconnect_attempts = 0
         self._reconnect_stopped = True
+        self._bot_name = ""
 
     async def on_load(self) -> None:
         settings = self._settings()
@@ -52,6 +54,23 @@ class MaiBotMaidAdapterPlugin(MaidBridgeMaidPlugin, MaiBotPlugin):
         self.ctx.logger.info("MaiBot 女仆适配器运行时已停止")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
+        if scope == ON_BOT_CONFIG_RELOAD:
+            settings = self._settings()
+            old_name = str(getattr(self, "_bot_name", "") or "").strip()
+            new_name = self._bot_name_from_config(config_data) or await self._resolve_bot_name(settings)
+            if new_name == old_name:
+                return
+            self.ctx.logger.info(f"MaiBot 本体昵称已更新，正在刷新 MaidBridge 显示名 [name={new_name}]")
+            self._bot_name = new_name
+            if not settings.enabled:
+                return
+            self._reconnect_stopped = True
+            await self._cancel_reconnect_task("bot_config_reload")
+            await self._stop_runtime()
+            self._reconnect_stopped = False
+            self._reconnect_attempts = 0
+            await self._start_runtime(settings, metadata={"bot_name": new_name, "config_version": version})
+            return
         if scope != "self":
             return
         self.ctx.logger.info(f"正在重载 MaiBot 女仆适配器配置 [version={version}]")

@@ -2,8 +2,9 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-SUPPORTED_CONFIG_VERSION = "0.3.2"
+SUPPORTED_CONFIG_VERSION = "0.3.3"
 DEFAULT_SERVER_ID = "minecraft-local"
+DEFAULT_AGENT_ID = "maibot"
 DEFAULT_JAVA_SERVER_URI = "ws://127.0.0.1:8765/maidbridge"
 DEFAULT_MAID_CHANNEL_NAME = "maid"
 DEFAULT_CLIENT_ROLES = ["maid_api_query", "maid_api_call", "debug"]
@@ -63,13 +64,23 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
     )
     maid_channel_name: str = Field(
         default=DEFAULT_MAID_CHANNEL_NAME,
-        description="外部 prompt / MaiBot 会话中显示的女仆频道名。",
-        json_schema_extra={"label": "女仆频道名", "order": 2, "placeholder": DEFAULT_MAID_CHANNEL_NAME},
+        description="兼容旧版配置；外部接管会话显示名优先使用 MaiBot 本体昵称。",
+        json_schema_extra={"label": "兼容女仆频道名", "order": 2, "placeholder": DEFAULT_MAID_CHANNEL_NAME},
     )
     server_id: str = Field(
         default=DEFAULT_SERVER_ID,
         description="适配器向 Java MaidBridge 声明的客户端服务 ID。",
         json_schema_extra={"label": "客户端服务 ID", "order": 3, "placeholder": DEFAULT_SERVER_ID},
+    )
+    agent_id: str = Field(
+        default=DEFAULT_AGENT_ID,
+        description="适配器向 Java MaidBridge 声明的兼容标识；MaiBot 本体昵称读取失败时作为回退值。",
+        json_schema_extra={
+            "label": "兼容 agent 标识",
+            "hint": "游戏内显示名优先取 MaiBot 全局配置 bot.nickname；这里主要用于连接调试和回退。",
+            "order": 4,
+            "placeholder": DEFAULT_AGENT_ID,
+        },
     )
     enable_message_out_events: bool = Field(
         default=False,
@@ -77,7 +88,7 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "启用女仆输出事件",
             "hint": "这里只观察 MaidBridge maid.message.out 帧，不会调用其他适配器插件。",
-            "order": 4,
+            "order": 5,
         },
     )
     server_uri: str = Field(
@@ -85,14 +96,14 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         description="Java MaidBridge WebSocket 服务地址。",
         json_schema_extra={
             "label": "Java MaidBridge 地址",
-            "order": 5,
+            "order": 6,
             "placeholder": DEFAULT_JAVA_SERVER_URI,
         },
     )
     access_token: str = Field(
         default="",
         description="和 Java MaidBridge 共用的 Bearer Token。",
-        json_schema_extra={"label": "访问令牌", "input_type": "password", "order": 6, "placeholder": "可选"},
+        json_schema_extra={"label": "访问令牌", "input_type": "password", "order": 7, "placeholder": "可选"},
     )
     max_message_bytes: int = Field(
         default=DEFAULT_MAX_MESSAGE_BYTES,
@@ -102,7 +113,7 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "最大消息字节数",
             "hint": "需要和 Java MaidBridge 的 maxBridgeMessageBytes 保持兼容。",
-            "order": 7,
+            "order": 8,
         },
     )
     request_timeout_ms: int = Field(
@@ -113,45 +124,45 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "请求超时毫秒",
             "hint": "用于 bridge.session.ready、maid.api.response、maid.message.response 等需要响应的请求。",
-            "order": 8,
+            "order": 9,
         },
     )
     reconnect_max_attempts: int = Field(
         default=DEFAULT_RECONNECT_MAX_ATTEMPTS,
         ge=0,
         description="WebSocket 启动失败或断开后的后台重连次数上限。",
-        json_schema_extra={"label": "最大重连次数", "order": 9},
+        json_schema_extra={"label": "最大重连次数", "order": 10},
     )
     reconnect_initial_delay_ms: int = Field(
         default=DEFAULT_RECONNECT_INITIAL_DELAY_MS,
         ge=0,
         description="第一次后台重连前的等待时间。",
-        json_schema_extra={"label": "初始重连延迟毫秒", "order": 10},
+        json_schema_extra={"label": "初始重连延迟毫秒", "order": 11},
     )
     reconnect_max_delay_ms: int = Field(
         default=DEFAULT_RECONNECT_MAX_DELAY_MS,
         ge=0,
         description="指数退避重连等待时间上限。",
-        json_schema_extra={"label": "最大重连延迟毫秒", "order": 11},
+        json_schema_extra={"label": "最大重连延迟毫秒", "order": 12},
     )
     reply_generation_model: str = Field(
         default=DEFAULT_REPLY_GENERATION_MODEL,
         description="外部接管回复生成使用的 MaiBot LLM 任务名；留空时使用宿主默认任务。",
-        json_schema_extra={"label": "回复生成模型", "order": 12, "placeholder": DEFAULT_REPLY_GENERATION_MODEL},
+        json_schema_extra={"label": "回复生成模型", "order": 13, "placeholder": DEFAULT_REPLY_GENERATION_MODEL},
     )
     reply_generation_temperature: float = Field(
         default=DEFAULT_REPLY_GENERATION_TEMPERATURE,
         ge=0,
         le=2,
         description="外部接管回复生成温度。",
-        json_schema_extra={"label": "回复生成温度", "order": 13},
+        json_schema_extra={"label": "回复生成温度", "order": 14},
     )
     reply_generation_max_tokens: int = Field(
         default=DEFAULT_REPLY_GENERATION_MAX_TOKENS,
         ge=32,
         le=2048,
         description="外部接管回复生成最大 token 数。",
-        json_schema_extra={"label": "回复生成最大 token", "order": 14},
+        json_schema_extra={"label": "回复生成最大 token", "order": 15},
     )
     enable_agent_actions: bool = Field(
         default=True,
@@ -159,7 +170,7 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "启用女仆动作回写",
             "hint": "动作只在当前 pending 女仆回合内生效，不走 MaiBot 普通发送服务。",
-            "order": 15,
+            "order": 16,
         },
     )
     enable_agent_emoji_bubbles: bool = Field(
@@ -168,27 +179,27 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "启用表情气泡规划",
             "hint": "只有 Java MaidBridge 暴露 show_emoji_bubble action 时才会实际生效。",
-            "order": 16,
+            "order": 17,
         },
     )
     action_planning_model: str = Field(
         default="",
         description="外部接管动作规划使用的 MaiBot LLM 任务名；留空时复用回复生成模型。",
-        json_schema_extra={"label": "动作规划模型", "order": 17, "placeholder": "留空复用回复生成模型"},
+        json_schema_extra={"label": "动作规划模型", "order": 18, "placeholder": "留空复用回复生成模型"},
     )
     action_planning_temperature: float = Field(
         default=DEFAULT_ACTION_PLANNING_TEMPERATURE,
         ge=0,
         le=2,
         description="外部接管动作规划温度。",
-        json_schema_extra={"label": "动作规划温度", "order": 18},
+        json_schema_extra={"label": "动作规划温度", "order": 19},
     )
     action_planning_max_tokens: int = Field(
         default=DEFAULT_ACTION_PLANNING_MAX_TOKENS,
         ge=32,
         le=2048,
         description="外部接管动作规划最大 token 数。",
-        json_schema_extra={"label": "动作规划最大 token", "order": 19},
+        json_schema_extra={"label": "动作规划最大 token", "order": 20},
     )
 
 
@@ -207,6 +218,10 @@ class MaiBotMaidAdapterSettings(PluginConfigBase):
     @property
     def server_id(self) -> str:
         return self.maid_adapter.server_id.strip() or DEFAULT_SERVER_ID
+
+    @property
+    def agent_id(self) -> str:
+        return self.maid_adapter.agent_id.strip() or DEFAULT_AGENT_ID
 
     @property
     def websocket_role(self) -> str:

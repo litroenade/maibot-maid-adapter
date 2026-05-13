@@ -175,19 +175,22 @@ class BridgeFrame:
     target_endpoint: str = DEFAULT_CLIENT_ENDPOINT_ID
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "protocol": self.protocol,
             "type": self.type,
             "id": self.id,
-            "request_id": self.request_id or self.id,
-            "trace_id": self.trace_id,
-            "deadline_ms": self.deadline_ms,
             "direction": self.direction,
             "source_endpoint": self.source_endpoint,
             "target_endpoint": self.target_endpoint,
-            "reply_to": self.reply_to,
             "payload": self.payload,
         }
+        if self.request_id and self.request_id != self.id:
+            data["request_id"] = self.request_id
+        if self.trace_id and self.trace_id != self.id:
+            data["trace_id"] = self.trace_id
+        if self.reply_to:
+            data["reply_to"] = self.reply_to
+        return data
 
     def dumps(self, *, max_bytes: int = DEFAULT_MAX_MESSAGE_BYTES) -> str:
         encoded = json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"))
@@ -200,20 +203,21 @@ class BridgeFrame:
         protocol = data.get("protocol")
         if protocol != PROTOCOL:
             raise BridgeProtocolError(f"不支持的协议：{protocol}")
-        deadline_ms = data.get("deadline_ms")
+        deadline_ms = data.get("deadline_ms", DEFAULT_DEADLINE_MS)
         if not isinstance(deadline_ms, int) or deadline_ms <= 0:
             raise BridgeProtocolError("deadline_ms 必须是正整数")
         payload = _require_mapping(data, "payload")
+        frame_id = _require_string(data, "id")
         frame = cls(
             protocol=protocol,
             type=_require_string(data, "type"),
-            id=_require_string(data, "id"),
-            request_id=_optional_string(data, "request_id") or _require_string(data, "id"),
+            id=frame_id,
+            request_id=_optional_string(data, "request_id") or frame_id,
             reply_to=_optional_string(data, "reply_to"),
             direction=_require_direction(data),
-            source_endpoint=_require_string(data, "source_endpoint"),
-            target_endpoint=_require_string(data, "target_endpoint"),
-            trace_id=_optional_string(data, "trace_id") or _require_string(data, "id"),
+            source_endpoint=_optional_string(data, "source_endpoint") or DEFAULT_JAVA_ENDPOINT_ID,
+            target_endpoint=_optional_string(data, "target_endpoint") or DEFAULT_CLIENT_ENDPOINT_ID,
+            trace_id=_optional_string(data, "trace_id") or frame_id,
             deadline_ms=deadline_ms,
             payload=payload,
         )
@@ -288,6 +292,7 @@ def build_ai_event_frame(
 def build_session_initialize_frame(
     *,
     client_id: str,
+    agent_id: str = "",
     roles: Iterable[str],
     subscriptions: Iterable[str],
     deadline_ms: int = DEFAULT_DEADLINE_MS,
@@ -296,6 +301,15 @@ def build_session_initialize_frame(
     target_endpoint: str = DEFAULT_JAVA_ENDPOINT_ID,
 ) -> BridgeFrame:
     frame_id = client_id.strip() or f"client-{int(time() * 1000)}"
+    normalized_agent_id = _first_non_blank(agent_id)
+    payload: dict[str, Any] = {
+        "client_id": frame_id,
+        "roles": [str(role) for role in roles if str(role).strip()],
+        "subscriptions": [str(item) for item in subscriptions if str(item).strip()],
+    }
+    if normalized_agent_id:
+        payload["agent_id"] = normalized_agent_id
+        payload["client_name"] = normalized_agent_id
     frame = BridgeFrame(
         protocol=PROTOCOL,
         type="bridge.session.initialize",
@@ -306,11 +320,7 @@ def build_session_initialize_frame(
         direction=CLIENT_TO_JAVA,
         source_endpoint=source_endpoint,
         target_endpoint=target_endpoint,
-        payload={
-            "client_id": frame_id,
-            "roles": [str(role) for role in roles if str(role).strip()],
-            "subscriptions": [str(item) for item in subscriptions if str(item).strip()],
-        },
+        payload=payload,
     )
     BridgeFrame.from_dict(frame.to_dict())
     return frame

@@ -17,7 +17,7 @@ class TurnContext:
     frame: BridgeFrame
     turn_id: str
     maid_uuid: str
-    maid_name: str
+    bot_name: str
     speaker_uuid: str
     speaker_name: str
     text: str
@@ -31,7 +31,7 @@ class TurnContext:
     tools: list[dict[str, Any]]
 
 
-def parse_turn_context(frame: BridgeFrame, settings: Any) -> TurnContext:
+def parse_turn_context(frame: BridgeFrame, settings: Any, *, bot_name: str = "") -> TurnContext:
     if frame.type != "maid.agent.turn.request":
         raise BridgeProtocolError(f"不支持的女仆 agent 轮次帧类型：{frame.type}")
     payload = frame.payload
@@ -47,11 +47,16 @@ def parse_turn_context(frame: BridgeFrame, settings: Any) -> TurnContext:
         raise BridgeProtocolError("maid.agent.turn.request message 文本不能为空")
     speaker = _mapping(payload.get("speaker"))
     scope = f"maid:{maid_uuid}"
+    resolved_bot_name = first_non_blank(
+        bot_name,
+        getattr(settings, "agent_id", ""),
+        "maibot",
+    )
     return TurnContext(
         frame=frame,
         turn_id=turn_id,
         maid_uuid=maid_uuid,
-        maid_name=first_non_blank(maid.get("name"), getattr(settings, "maid_channel_name", "")),
+        bot_name=resolved_bot_name,
         speaker_uuid=first_non_blank(speaker.get("uuid"), speaker.get("source_member_id"), "minecraft-user"),
         speaker_name=first_non_blank(speaker.get("name"), speaker.get("nickname"), "Player"),
         text=text,
@@ -77,9 +82,9 @@ def build_maibot_message(context: TurnContext) -> dict[str, Any]:
         "platform_io_scope": context.scope,
         "maidbridge_turn_id": context.turn_id,
         "maid_uuid": context.maid_uuid,
-        "maid_name": context.maid_name,
+        "bot_name": context.bot_name,
         "minecraft_channel_id": context.scope,
-        "minecraft_channel_name": context.maid_name,
+        "minecraft_channel_name": context.bot_name,
         "speaker_uuid": context.speaker_uuid,
         "speaker_name": context.speaker_name,
         "maid_state": dict(context.state),
@@ -97,7 +102,7 @@ def build_maibot_message(context: TurnContext) -> dict[str, Any]:
             },
             "group_info": {
                 "group_id": context.scope,
-                "group_name": context.maid_name,
+                "group_name": context.bot_name,
             },
             "additional_config": additional_config,
         },
@@ -114,16 +119,20 @@ def build_route_metadata(context: TurnContext) -> dict[str, Any]:
         "maidbridge_turn_id": context.turn_id,
         "maid_uuid": context.maid_uuid,
         "minecraft_channel_id": context.scope,
-        "minecraft_channel_name": context.maid_name,
+        "minecraft_channel_name": context.bot_name,
+        "bot_name": context.bot_name,
         "speaker_uuid": context.speaker_uuid,
         "speaker_name": context.speaker_name,
     }
 
 
 def build_planner_context(context: TurnContext) -> dict[str, Any]:
+    maid = {"name": context.bot_name}
+    if model_id := first_non_blank(context.maid.get("model_id")):
+        maid["model_id"] = model_id
     payload: dict[str, Any] = {
         "turn_id": context.turn_id,
-        "maid": _selected_mapping(context.maid, "uuid", "name"),
+        "maid": maid,
         "speaker": _selected_mapping(context.speaker, "uuid", "name", "language", "description"),
         "state": dict(context.state),
     }

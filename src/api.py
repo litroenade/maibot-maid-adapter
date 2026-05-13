@@ -4,7 +4,14 @@ from uuid import uuid4
 
 from maibot_sdk import API
 
-from .constants import ADAPTER_STATE_NAME, CLIENT_TO_JAVA, DEFAULT_ENDPOINT_ID, PLATFORM, PROTOCOL
+from .constants import (
+    ADAPTER_STATE_NAME,
+    CLIENT_TO_JAVA,
+    DEFAULT_ENDPOINT_ID,
+    PLATFORM,
+    PROTOCOL,
+    TYPE_MAID_API_CALL_MAID_ACTION,
+)
 from .protocol import query_api
 from .protocol.frame import BridgeProtocolError, build_ai_event_frame
 
@@ -79,19 +86,50 @@ class MaidApi:
         server_id: str = "",
         endpoint_id: str = "",
         deadline_ms: int = 0,
+        source_member_name: str = "",
     ) -> dict[str, Any]:
+        client_info = {
+            "source_member_id": source_member_id,
+            "mode": "maid_message",
+        }
+        member_name = source_member_name.strip()
+        if member_name:
+            client_info["name"] = member_name
+            client_info["source_member_name"] = member_name
+            client_info["nickname"] = member_name
         payload = {
             "text": text,
-            "client_info": {
-                "source_member_id": source_member_id,
-                "mode": "maid_message",
-            },
+            "client_info": client_info,
             "maid": {
                 "uuid": maid_uuid,
             },
         }
         return await self._send_maid_frame(
             "maid.message.in",
+            payload,
+            server_id=server_id,
+            endpoint_id=endpoint_id,
+            deadline_ms=deadline_ms,
+        )
+
+    @API("maid_show_emoji", description="单独发送女仆表情气泡动作帧", version="1", public=True)
+    async def maid_show_emoji(
+        self,
+        kind: str = "image",
+        maid_uuid: str = "",
+        server_id: str = "",
+        endpoint_id: str = "",
+        deadline_ms: int = 0,
+    ) -> dict[str, Any]:
+        payload = {
+            "type": "show_emoji_bubble",
+            "kind": kind,
+            "maid": {
+                "uuid": maid_uuid,
+            },
+        }
+        return await self._send_maid_frame(
+            TYPE_MAID_API_CALL_MAID_ACTION,
             payload,
             server_id=server_id,
             endpoint_id=endpoint_id,

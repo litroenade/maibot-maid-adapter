@@ -44,18 +44,20 @@ class MaidAgentTurnService:
         send_frame: SendFrame,
         state: Any | None = None,
         gateway_name: str = ADAPTER_STATE_NAME,
+        bot_name: str = "",
     ) -> None:
         self._ctx = ctx
         self._settings = settings
         self._state = state
         self._send_frame = send_frame
         self._gateway_name = gateway_name
+        self._bot_name = str(bot_name or "").strip()
         self._pending_by_turn_id: dict[str, _PendingTurn] = {}
         self._pending_by_scope: dict[str, _PendingTurn] = {}
         self._pending_by_session_id: dict[str, _PendingTurn] = {}
 
     async def handle(self, frame: BridgeFrame) -> dict[str, Any]:
-        context = parse_turn_context(frame, self._settings)
+        context = parse_turn_context(frame, self._settings, bot_name=self._bot_name)
         loop = asyncio.get_running_loop()
         pending = _PendingTurn(context=context, future=loop.create_future())
         try:

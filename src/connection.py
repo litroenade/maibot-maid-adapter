@@ -9,9 +9,9 @@ from .runtime.builder import build_runtime_bundle
 from .runtime.runtime_router import RuntimeRouter
 from .runtime.state import PendingRequest
 from .transport import AioHttpWebSocketBridgeTransport, BridgeTransport
-from .utils import reconnect_attempt
+from .utils import first_non_blank, reconnect_attempt
 
- 
+
 class MaidBridgeConnection:
     async def _start_runtime(
         self,
@@ -32,6 +32,8 @@ class MaidBridgeConnection:
                 f"message_out_events={settings.enable_message_out_events}, "
                 f"maid_agent_turns={settings.enable_maid_agent_turns}]"
             )
+        bot_name = await self._resolve_bot_name(settings)
+        self._bot_name = bot_name
         transport = self._build_transport(settings)
         transport.on_open(lambda: self._handle_transport_open(settings, metadata=metadata))
         transport.on_close(lambda: self._handle_transport_close(settings))
@@ -41,6 +43,7 @@ class MaidBridgeConnection:
                 settings=settings,
                 state=self._state,
                 send_frame=self._send_frame,
+                bot_name=bot_name,
             )
             if settings.enable_maid_agent_turns
             else None
@@ -230,8 +233,11 @@ class MaidBridgeConnection:
     async def _send_session_initialize(self, settings: Any) -> None:
         if self._transport is None:
             return
+        bot_name = first_non_blank(getattr(self, "_bot_name", ""), settings.agent_id, "maibot")
         frame = build_session_initialize_frame(
             client_id=f"{settings.server_id}@{self._websocket_url(settings)}",
+            # Java 端历史字段仍叫 agent_id/client_name，这里承载的是 MaiBot 本体显示名。
+            agent_id=bot_name,
             roles=settings.client_roles,
             subscriptions=settings.subscriptions,
             deadline_ms=settings.request_timeout_ms,
@@ -250,6 +256,14 @@ class MaidBridgeConnection:
             f"MaidBridge 握手完成 [request_id={frame.request_id}, reply_type={reply_type}, "
             f"roles={len(settings.client_roles)}, subscriptions={len(settings.subscriptions)}]"
         )
+
+    async def _resolve_bot_name(self, settings: Any) -> str:
+        try:
+            nickname = await self.ctx.config.get("bot.nickname", "")
+        except Exception as exc:
+            self.ctx.logger.debug(f"MaidBridge 读取 MaiBot 本体昵称失败，使用配置回退值 [error={exc}]")
+            nickname = ""
+        return first_non_blank(nickname, settings.agent_id, "maibot")
 
     async def _handle_transport_close(self, settings: Any) -> None:
         pending = self._state.mark_disconnected()
