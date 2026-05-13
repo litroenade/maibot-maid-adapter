@@ -2,7 +2,7 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-SUPPORTED_CONFIG_VERSION = "0.3.3"
+SUPPORTED_CONFIG_VERSION = "0.3.4"
 DEFAULT_SERVER_ID = "minecraft-local"
 DEFAULT_AGENT_ID = "maibot"
 DEFAULT_JAVA_SERVER_URI = "ws://127.0.0.1:8765/maidbridge"
@@ -16,6 +16,7 @@ DEFAULT_SUBSCRIPTIONS = [
 ]
 DEFAULT_REQUEST_TIMEOUT_MS = 30000
 DEFAULT_MAX_MESSAGE_BYTES = 32768
+DEFAULT_MAX_PENDING_MAID_AGENT_TURNS = 256
 DEFAULT_RECONNECT_MAX_ATTEMPTS = 5
 DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1000
 DEFAULT_RECONNECT_MAX_DELAY_MS = 30000
@@ -145,24 +146,35 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         description="指数退避重连等待时间上限。",
         json_schema_extra={"label": "最大重连延迟毫秒", "order": 12},
     )
+    max_pending_maid_agent_turns: int = Field(
+        default=DEFAULT_MAX_PENDING_MAID_AGENT_TURNS,
+        ge=1,
+        le=4096,
+        description="女仆 agent 轮次在适配器内等待或处理中时允许保留的总数。",
+        json_schema_extra={
+            "label": "待处理女仆轮次上限",
+            "hint": "同一 Maisaka 会话仍会按顺序注入 MaiBot；该上限只用于防止异常堆积。",
+            "order": 13,
+        },
+    )
     reply_generation_model: str = Field(
         default=DEFAULT_REPLY_GENERATION_MODEL,
         description="外部接管回复生成使用的 MaiBot LLM 任务名；留空时使用宿主默认任务。",
-        json_schema_extra={"label": "回复生成模型", "order": 13, "placeholder": DEFAULT_REPLY_GENERATION_MODEL},
+        json_schema_extra={"label": "回复生成模型", "order": 14, "placeholder": DEFAULT_REPLY_GENERATION_MODEL},
     )
     reply_generation_temperature: float = Field(
         default=DEFAULT_REPLY_GENERATION_TEMPERATURE,
         ge=0,
         le=2,
         description="外部接管回复生成温度。",
-        json_schema_extra={"label": "回复生成温度", "order": 14},
+        json_schema_extra={"label": "回复生成温度", "order": 15},
     )
     reply_generation_max_tokens: int = Field(
         default=DEFAULT_REPLY_GENERATION_MAX_TOKENS,
         ge=32,
         le=2048,
         description="外部接管回复生成最大 token 数。",
-        json_schema_extra={"label": "回复生成最大 token", "order": 15},
+        json_schema_extra={"label": "回复生成最大 token", "order": 16},
     )
     enable_agent_actions: bool = Field(
         default=True,
@@ -170,7 +182,7 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "启用女仆动作回写",
             "hint": "动作只在当前 pending 女仆回合内生效，不走 MaiBot 普通发送服务。",
-            "order": 16,
+            "order": 17,
         },
     )
     enable_agent_emoji_bubbles: bool = Field(
@@ -179,27 +191,27 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         json_schema_extra={
             "label": "启用表情气泡规划",
             "hint": "只有 Java MaidBridge 暴露 show_emoji_bubble action 时才会实际生效。",
-            "order": 17,
+            "order": 18,
         },
     )
     action_planning_model: str = Field(
         default="",
         description="外部接管动作规划使用的 MaiBot LLM 任务名；留空时复用回复生成模型。",
-        json_schema_extra={"label": "动作规划模型", "order": 18, "placeholder": "留空复用回复生成模型"},
+        json_schema_extra={"label": "动作规划模型", "order": 19, "placeholder": "留空复用回复生成模型"},
     )
     action_planning_temperature: float = Field(
         default=DEFAULT_ACTION_PLANNING_TEMPERATURE,
         ge=0,
         le=2,
         description="外部接管动作规划温度。",
-        json_schema_extra={"label": "动作规划温度", "order": 19},
+        json_schema_extra={"label": "动作规划温度", "order": 20},
     )
     action_planning_max_tokens: int = Field(
         default=DEFAULT_ACTION_PLANNING_MAX_TOKENS,
         ge=32,
         le=2048,
         description="外部接管动作规划最大 token 数。",
-        json_schema_extra={"label": "动作规划最大 token", "order": 20},
+        json_schema_extra={"label": "动作规划最大 token", "order": 21},
     )
 
 
@@ -254,6 +266,10 @@ class MaiBotMaidAdapterSettings(PluginConfigBase):
     @property
     def reconnect_max_delay_ms(self) -> int:
         return self.maid_adapter.reconnect_max_delay_ms
+
+    @property
+    def max_pending_maid_agent_turns(self) -> int:
+        return self.maid_adapter.max_pending_maid_agent_turns
 
     @property
     def client_roles(self) -> list[str]:

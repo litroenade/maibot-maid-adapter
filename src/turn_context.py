@@ -28,7 +28,6 @@ class TurnContext:
     state: dict[str, Any]
     action_context: dict[str, Any]
     actions: list[dict[str, Any]]
-    tools: list[dict[str, Any]]
 
 
 def parse_turn_context(frame: BridgeFrame, settings: Any, *, bot_name: str = "") -> TurnContext:
@@ -72,7 +71,6 @@ def parse_turn_context(frame: BridgeFrame, settings: Any, *, bot_name: str = "")
         state=_mapping(payload.get("state")),
         action_context=_mapping(payload.get("action_context")),
         actions=_mapping_list(payload.get("actions")),
-        tools=_mapping_list(payload.get("tools")),
     )
 
 
@@ -133,7 +131,7 @@ def build_planner_context(context: TurnContext) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "turn_id": context.turn_id,
         "maid": maid,
-        "speaker": _selected_mapping(context.speaker, "uuid", "name", "language", "description"),
+        "speaker": _selected_mapping(context.speaker, "uuid", "name", "language"),
         "state": dict(context.state),
     }
     if context.action_context:
@@ -141,9 +139,6 @@ def build_planner_context(context: TurnContext) -> dict[str, Any]:
     actions = _capability_summary(context.actions)
     if actions:
         payload["actions"] = actions
-    tools = _capability_summary(context.tools)
-    if tools:
-        payload["tools"] = tools
     return payload
 
 
