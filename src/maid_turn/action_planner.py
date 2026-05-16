@@ -1,12 +1,9 @@
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping
 from typing import Any
 
-from ..config import DEFAULT_ACTION_PLANNING_MAX_TOKENS, DEFAULT_ACTION_PLANNING_TEMPERATURE
-from .prompt_loader import render_prompt
-from .utils import first_non_blank
+from ..prompt_loader import render_prompt
+from ..utils import first_non_blank
 
 
 async def plan_external_actions(
@@ -18,11 +15,12 @@ async def plan_external_actions(
     arguments: Mapping[str, Any],
     tool_call_id: str,
 ) -> dict[str, Any]:
-    if not bool(getattr(settings, "enable_agent_actions", True)):
-        return {"success": True, "actions": [], "reason": "agent_actions_disabled"}
-    action_defs = _available_actions(turn_context)
-    if not bool(getattr(settings, "enable_agent_emoji_bubbles", True)):
-        action_defs.pop("show_emoji_bubble", None)
+    if not settings.enable_agent_actions:
+        return {"success": True, "actions": [], "reason": "maid_turn_actions_disabled"}
+    action_defs = _available_actions(
+        turn_context,
+        include_emoji_bubbles=settings.enable_agent_emoji_bubbles,
+    )
     if not action_defs:
         return {"success": True, "actions": [], "reason": "no_java_actions"}
 
@@ -34,9 +32,9 @@ async def plan_external_actions(
                 arguments=arguments,
                 tool_call_id=tool_call_id,
             ),
-            model=str(getattr(settings, "action_planning_model", "") or getattr(settings, "reply_generation_model", "") or ""),
-            temperature=float(getattr(settings, "action_planning_temperature", DEFAULT_ACTION_PLANNING_TEMPERATURE)),
-            max_tokens=int(getattr(settings, "action_planning_max_tokens", DEFAULT_ACTION_PLANNING_MAX_TOKENS)),
+            model=settings.action_planning_model,
+            temperature=float(settings.action_planning_temperature),
+            max_tokens=int(settings.action_planning_max_tokens),
         )
     except Exception as exc:
         return {"success": False, "actions": [], "error": str(exc)}
@@ -84,7 +82,11 @@ def _action_prompt(
     ]
 
 
-def _available_actions(turn_context: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+def _available_actions(
+    turn_context: Mapping[str, Any],
+    *,
+    include_emoji_bubbles: bool = True,
+) -> dict[str, Mapping[str, Any]]:
     actions = turn_context.get("actions")
     if not isinstance(actions, Mapping):
         return {}
@@ -96,6 +98,8 @@ def _available_actions(turn_context: Mapping[str, Any]) -> dict[str, Mapping[str
         if not isinstance(item, Mapping):
             continue
         action_id = _canonical_action_type(first_non_blank(item.get("id"), item.get("name")))
+        if action_id == "show_emoji_bubble" and not include_emoji_bubbles:
+            continue
         if action_id:
             result[action_id] = item
     return result
@@ -200,7 +204,6 @@ def _canonical_action_type(raw: str) -> str:
         "emoji_bubble": "show_emoji_bubble",
         "show_emoji": "show_emoji_bubble",
         "show_maid_emoji": "show_emoji_bubble",
-        "show_external_emoji": "show_emoji_bubble",
     }.get(normalized, normalized)
 
 

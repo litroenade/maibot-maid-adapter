@@ -50,17 +50,10 @@ def route_frame(
         return _route_session_ready(frame)
     if frame.type == "maid.api.response":
         return _route_domain_response(frame, "api_response")
-    if frame.type in {"maid.message.response", "bridge.gateway.response"}:
-        return _route_domain_response(frame, "domain_response")
     if frame.type == "bridge.error":
         return _route_domain_response(frame, "bridge_error")
-    if frame.type == "maid.message.out":
-        direction_error = _java_to_client_error(frame)
-        if direction_error is not None:
-            return direction_error
-        return RouteDecision(kind="message_out", payload={})
     if frame.type == "maid.agent.turn.request":
-        return _route_maid_agent_turn(frame)
+        return _route_maid_turn(frame)
     if frame.type in _AI_CHAIN_EVENTS or frame.type.startswith(_SERVER_EVENT_PREFIX):
         direction_error = _java_to_client_error(frame)
         if direction_error is not None:
@@ -126,7 +119,7 @@ def _route_registry_catalog(
         return RouteDecision(kind="bridge_error", payload={"error": f"{payload_key} 必须是列表"})
     items = [dict(item) for item in raw_items if isinstance(item, Mapping)]
     if len(items) != len(raw_items):
-            return RouteDecision(kind="bridge_error", payload={"error": f"{payload_key} 的条目必须是对象"})
+        return RouteDecision(kind="bridge_error", payload={"error": f"{payload_key} 的条目必须是对象"})
     revision = frame.payload.get("revision", 0)
     if not isinstance(revision, int) or revision < 0:
         return RouteDecision(kind="bridge_error", payload={"error": "revision 必须是非负整数"})
@@ -155,22 +148,22 @@ def _java_to_client_error(frame: BridgeFrame) -> RouteDecision | None:
     return RouteDecision(kind="bridge_error", payload={"error": f"{frame.type} 的 direction 必须是 java_to_client"})
 
 
-def _route_maid_agent_turn(frame: BridgeFrame) -> RouteDecision:
+def _route_maid_turn(frame: BridgeFrame) -> RouteDecision:
     direction_error = _java_to_client_error(frame)
     if direction_error is not None:
         return direction_error
     message = _message_text(frame.payload.get("message"))
     if not message.strip():
-        return RouteDecision(kind="bridge_error", payload={"error": "女仆 agent 轮次 message 必须是非空字符串"})
+        return RouteDecision(kind="bridge_error", payload={"error": "女仆回合 message 必须是非空字符串"})
     maid = frame.payload.get("maid") if isinstance(frame.payload.get("maid"), Mapping) else {}
     turn_id = _first_non_empty(frame.payload.get("turn_id"), frame.request_id, frame.id)
     maid_uuid = _first_non_empty(maid.get("uuid") if isinstance(maid, Mapping) else "")
     if not turn_id:
-        return RouteDecision(kind="bridge_error", payload={"error": "女仆 agent 轮次 turn_id 不能为空"})
+        return RouteDecision(kind="bridge_error", payload={"error": "女仆回合 turn_id 不能为空"})
     if not maid_uuid:
         return RouteDecision(kind="bridge_error", payload={"error": "payload.maid.uuid 不能为空"})
     return RouteDecision(
-        kind="maid_agent_turn",
+        kind="maid_turn",
         payload={
             "accepted": frame.type,
             "request_id": frame.request_id,
@@ -192,11 +185,11 @@ def _first_non_empty(*values: Any) -> str:
 
 
 def _payload_server_id(frame: BridgeFrame) -> str:
-    return _first_non_empty(frame.payload.get("server_id"), frame.payload.get("serverId"), frame.source_endpoint)
+    return _first_non_empty(frame.payload.get("server_id"), frame.source_endpoint)
 
 
 def _payload_endpoint_id(frame: BridgeFrame) -> str:
-    return _first_non_empty(frame.payload.get("endpoint_id"), frame.payload.get("endpointId"), frame.source_endpoint)
+    return _first_non_empty(frame.payload.get("endpoint_id"), frame.source_endpoint)
 
 
 def _message_text(message: Any) -> str:

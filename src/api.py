@@ -1,5 +1,6 @@
 import asyncio
-from typing import Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from maibot_sdk import API
@@ -10,13 +11,29 @@ from .constants import (
     DEFAULT_ENDPOINT_ID,
     PLATFORM,
     PROTOCOL,
-    TYPE_MAID_API_CALL_MAID_ACTION,
+    WEBSOCKET_ROLE,
 )
 from .protocol import query_api
 from .protocol.frame import BridgeProtocolError, build_ai_event_frame
+from .runtime.state import BridgeRuntimeState, PendingRequest
 
 
 class MaidApi:
+    if TYPE_CHECKING:
+        _state: BridgeRuntimeState
+        _transport: Any | None
+        _router: Any | None
+
+        @property
+        def ctx(self) -> Any:
+            raise NotImplementedError
+
+        def _settings(self) -> Any:
+            raise NotImplementedError
+
+        def _mark_transport_unhealthy(self) -> None:
+            raise NotImplementedError
+
     @API("status", description="获取 MaidBridge 适配器运行状态", version="1", public=True)
     async def get_status(self) -> dict[str, Any]:
         settings = self._settings()
@@ -29,14 +46,13 @@ class MaidApi:
             "router_active": self._router is not None,
             "pending_request_count": len(self._state.pending_requests),
             "endpoint_count": len(self._state.endpoints),
-            "websocket_role": self._websocket_role(settings),
-            "websocket_url": self._websocket_url(settings),
+            "websocket_role": WEBSOCKET_ROLE,
+            "websocket_url": settings.websocket_url,
             "protocol": PROTOCOL,
             "adapter_name": ADAPTER_STATE_NAME,
             "platform": PLATFORM,
             "max_message_bytes": settings.max_message_bytes,
             "request_timeout_ms": settings.request_timeout_ms,
-            "enable_message_out_events": bool(settings.enable_message_out_events),
         }
 
     @API("pending_requests", description="列出等待响应的 MaidBridge 请求帧", version="1", public=True)
@@ -71,65 +87,6 @@ class MaidApi:
     ) -> dict[str, Any]:
         return await self._send_maid_frame(
             event_type,
-            payload,
-            server_id=server_id,
-            endpoint_id=endpoint_id,
-            deadline_ms=deadline_ms,
-        )
-
-    @API("maid_message", description="发送 MaidBridge maid.message.in 帧", version="1", public=True)
-    async def maid_message(
-        self,
-        text: str,
-        source_member_id: str = "",
-        maid_uuid: str = "",
-        server_id: str = "",
-        endpoint_id: str = "",
-        deadline_ms: int = 0,
-        source_member_name: str = "",
-    ) -> dict[str, Any]:
-        client_info = {
-            "source_member_id": source_member_id,
-            "mode": "maid_message",
-        }
-        member_name = source_member_name.strip()
-        if member_name:
-            client_info["name"] = member_name
-            client_info["source_member_name"] = member_name
-            client_info["nickname"] = member_name
-        payload = {
-            "text": text,
-            "client_info": client_info,
-            "maid": {
-                "uuid": maid_uuid,
-            },
-        }
-        return await self._send_maid_frame(
-            "maid.message.in",
-            payload,
-            server_id=server_id,
-            endpoint_id=endpoint_id,
-            deadline_ms=deadline_ms,
-        )
-
-    @API("maid_show_emoji", description="单独发送女仆表情气泡动作帧", version="1", public=True)
-    async def maid_show_emoji(
-        self,
-        kind: str = "image",
-        maid_uuid: str = "",
-        server_id: str = "",
-        endpoint_id: str = "",
-        deadline_ms: int = 0,
-    ) -> dict[str, Any]:
-        payload = {
-            "type": "show_emoji_bubble",
-            "kind": kind,
-            "maid": {
-                "uuid": maid_uuid,
-            },
-        }
-        return await self._send_maid_frame(
-            TYPE_MAID_API_CALL_MAID_ACTION,
             payload,
             server_id=server_id,
             endpoint_id=endpoint_id,
@@ -267,7 +224,8 @@ class MaidApi:
         if self._transport is None:
             return {"error": "MaidBridge 传输发送循环未启动"}
         payload = self._payload_with_default_maid(event_type, payload, settings)
-        maid = payload.get("maid") if isinstance(payload.get("maid"), dict) else {}
+        raw_maid = payload.get("maid")
+        maid = raw_maid if isinstance(raw_maid, dict) else {}
         request_id = f"maibot-maid-{uuid4()}"
         is_api_request = event_type.startswith("maid.api.") and not event_type.startswith("maid.api.registry.")
         frame = build_ai_event_frame(
@@ -292,16 +250,15 @@ class MaidApi:
         settings: Any,
     ) -> dict[str, Any]:
         prepared = dict(payload)
-        if event_type == "maid.message.in" or (
-            event_type.startswith("maid.api.") and not event_type.startswith("maid.api.registry.")
-        ):
-            maid = dict(prepared.get("maid")) if isinstance(prepared.get("maid"), dict) else {}
+        if event_type.startswith("maid.api.") and not event_type.startswith("maid.api.registry."):
+            raw_maid = prepared.get("maid")
+            maid = dict(raw_maid) if isinstance(raw_maid, Mapping) else {}
             if "maid_uuid" in prepared or "maid_entity_id" in prepared:
                 raise BridgeProtocolError(
                     "payload.maid.uuid 必须放在 maid 对象内，不支持根级 maid_uuid/maid_entity_id"
                 )
-            if not str(maid.get("uuid") or "").strip() and settings.default_maid_uuid:
-                maid["uuid"] = settings.default_maid_uuid
+            if not str(maid.get("uuid") or "").strip() and settings.maid_uuid:
+                maid["uuid"] = settings.maid_uuid
             if maid:
                 prepared["maid"] = maid
         return prepared
@@ -313,9 +270,9 @@ class MaidApi:
                 "type": "bridge.error",
                 "payload": {"error": "MaidBridge 传输发送循环未启动"},
             }
-        future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._state.add_pending(
-            self._pending_request(
+            PendingRequest(
                 request_id=frame.id,
                 trace_id=frame.trace_id,
                 deadline_ms=frame.deadline_ms,
@@ -347,6 +304,7 @@ class MaidApi:
             }
         except Exception as exc:
             self._state.pending_requests.pop(frame.id, None)
+            self._mark_transport_unhealthy()
             self.ctx.logger.warning(
                 f"MaidBridge 请求等待回复时失败 [request_id={frame.id}, "
                 f"trace_id={frame.trace_id}, error={exc}]"
@@ -357,4 +315,8 @@ class MaidApi:
         if self._transport is None:
             raise RuntimeError("MaidBridge 传输发送循环未启动")
         settings = self._settings()
-        await self._transport.send(frame.dumps(max_bytes=settings.max_message_bytes))
+        try:
+            await self._transport.send(frame.dumps(max_bytes=settings.max_message_bytes))
+        except Exception:
+            self._mark_transport_unhealthy()
+            raise

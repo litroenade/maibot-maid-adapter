@@ -3,7 +3,6 @@ from .frame import (
     BridgeProtocolError,
     build_ai_event_frame,
     build_maid_agent_turn_complete_frame,
-    build_maid_agent_turn_no_reply_frame,
     build_session_initialize_frame,
 )
 
@@ -12,6 +11,5 @@ __all__ = [
     "BridgeProtocolError",
     "build_ai_event_frame",
     "build_maid_agent_turn_complete_frame",
-    "build_maid_agent_turn_no_reply_frame",
     "build_session_initialize_frame",
 ]

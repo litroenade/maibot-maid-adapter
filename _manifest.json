@@ -27,11 +27,18 @@
       "type": "python_package",
       "name": "aiohttp",
       "version_spec": ">=3.9"
+    },
+    {
+      "type": "python_package",
+      "name": "Pillow",
+      "version_spec": ">=10.0"
     }
   ],
   "capabilities": [
     "api.call",
     "api.list",
+    "emoji.get_by_description",
+    "emoji.get_random",
     "llm.generate"
   ],
   "i18n": {

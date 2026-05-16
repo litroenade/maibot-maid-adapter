@@ -1,6 +1,5 @@
 import json
 from dataclasses import dataclass
-from time import time
 from typing import Any, Iterable, Mapping
 
 from ..constants import (
@@ -36,15 +35,6 @@ def _optional_string(data: Mapping[str, Any], key: str) -> str:
 
 def _require_mapping(data: Mapping[str, Any], key: str) -> dict[str, Any]:
     value = data.get(key)
-    if not isinstance(value, Mapping):
-        raise BridgeProtocolError(f"{key} 必须是对象")
-    return dict(value)
-
-
-def _optional_mapping(data: Mapping[str, Any], key: str) -> dict[str, Any]:
-    value = data.get(key)
-    if value is None:
-        return {}
     if not isinstance(value, Mapping):
         raise BridgeProtocolError(f"{key} 必须是对象")
     return dict(value)
@@ -99,8 +89,10 @@ def _payload_with_structured_identity(
     _put_mapping_value(normalized, "maid", {"uuid": maid_uuid, "owner_uuid": owner_uuid})
     _put_mapping_value(normalized, "sender", {"uuid": player_uuid})
     if dimension:
-        state = dict(normalized.get("maid_state")) if isinstance(normalized.get("maid_state"), Mapping) else {}
-        location = dict(state.get("location")) if isinstance(state.get("location"), Mapping) else {}
+        raw_state = normalized.get("maid_state")
+        state = dict(raw_state) if isinstance(raw_state, Mapping) else {}
+        raw_location = state.get("location")
+        location = dict(raw_location) if isinstance(raw_location, Mapping) else {}
         location.setdefault("dimension", dimension)
         state["location"] = location
         normalized["maid_state"] = state
@@ -113,15 +105,15 @@ def _is_maid_api_request_event(event_type: str) -> bool:
 
 def _requires_maid_uuid(event_type: str) -> bool:
     return (
-        event_type == "maid.message.in"
-        or event_type == "maid.agent.turn.complete"
+        event_type == "maid.agent.turn.complete"
         or _is_maid_api_request_event(event_type)
     )
 
 
 def _require_payload_maid_uuid(payload: Mapping[str, Any]) -> None:
-    maid = payload.get("maid") if isinstance(payload.get("maid"), Mapping) else {}
-    if not _first_non_blank(maid.get("uuid") if isinstance(maid, Mapping) else ""):
+    raw_maid = payload.get("maid")
+    maid = raw_maid if isinstance(raw_maid, Mapping) else {}
+    if not _first_non_blank(maid.get("uuid")):
         raise BridgeProtocolError("payload.maid.uuid 不能为空")
 
 
@@ -154,6 +146,9 @@ def _validate_turn_complete_payload(payload: Mapping[str, Any]) -> None:
             raise BridgeProtocolError("payload.actions 必须是列表")
         return
     if outcome == "no_reply":
+        actions = payload.get("actions", [])
+        if not isinstance(actions, list):
+            raise BridgeProtocolError("payload.actions 必须是列表")
         return
     raise BridgeProtocolError(f"不支持的 maid.agent.turn.complete outcome：{outcome}")
 
@@ -293,6 +288,7 @@ def build_session_initialize_frame(
     *,
     client_id: str,
     agent_id: str = "",
+    agent_name: str = "",
     roles: Iterable[str],
     subscriptions: Iterable[str],
     deadline_ms: int = DEFAULT_DEADLINE_MS,
@@ -300,16 +296,22 @@ def build_session_initialize_frame(
     source_endpoint: str = DEFAULT_CLIENT_ENDPOINT_ID,
     target_endpoint: str = DEFAULT_JAVA_ENDPOINT_ID,
 ) -> BridgeFrame:
-    frame_id = client_id.strip() or f"client-{int(time() * 1000)}"
+    frame_id = client_id.strip()
+    if not frame_id:
+        raise BridgeProtocolError("client_id 不能为空")
     normalized_agent_id = _first_non_blank(agent_id)
+    normalized_agent_name = _first_non_blank(agent_name, normalized_agent_id)
     payload: dict[str, Any] = {
         "client_id": frame_id,
         "roles": [str(role) for role in roles if str(role).strip()],
         "subscriptions": [str(item) for item in subscriptions if str(item).strip()],
     }
-    if normalized_agent_id:
-        payload["agent_id"] = normalized_agent_id
-        payload["client_name"] = normalized_agent_id
+    if normalized_agent_id or normalized_agent_name:
+        payload["agent"] = {
+            key: value
+            for key, value in {"id": normalized_agent_id, "name": normalized_agent_name}.items()
+            if value
+        }
     frame = BridgeFrame(
         protocol=PROTOCOL,
         type="bridge.session.initialize",
@@ -336,6 +338,8 @@ def build_maid_agent_turn_complete_frame(
     reason: str = "",
     history_policy: str = "append",
     actions: Iterable[Mapping[str, Any]] | None = None,
+    agent_id: str = "",
+    agent_name: str = "",
     deadline_ms: int = DEFAULT_DEADLINE_MS,
     trace_id: str = "",
     reply_to: str = "",
@@ -350,6 +354,14 @@ def build_maid_agent_turn_complete_frame(
         "maid": {"uuid": _first_non_blank(maid_uuid)},
         "outcome": _first_non_blank(outcome),
     }
+    normalized_agent_id = _first_non_blank(agent_id)
+    normalized_agent_name = _first_non_blank(agent_name)
+    if normalized_agent_id or normalized_agent_name:
+        payload["agent"] = {
+            key: value
+            for key, value in {"id": normalized_agent_id, "name": normalized_agent_name}.items()
+            if value
+        }
     if payload["outcome"] == "reply":
         text = _first_non_blank(reply_text)
         if not text:
@@ -362,6 +374,7 @@ def build_maid_agent_turn_complete_frame(
         payload["actions"] = [dict(action) for action in actions or []]
     elif payload["outcome"] == "no_reply":
         payload["reason"] = _first_non_blank(reason, "no_reply")
+        payload["actions"] = [dict(action) for action in actions or []]
     else:
         raise BridgeProtocolError(f"不支持的 maid.agent.turn.complete outcome：{payload['outcome']}")
     frame = BridgeFrame(
@@ -379,27 +392,3 @@ def build_maid_agent_turn_complete_frame(
     )
     BridgeFrame.from_dict(frame.to_dict())
     return frame
-
-
-def build_maid_agent_turn_no_reply_frame(
-    *,
-    turn_id: str,
-    maid_uuid: str,
-    reason: str = "no_reply",
-    deadline_ms: int = DEFAULT_DEADLINE_MS,
-    trace_id: str = "",
-    reply_to: str = "",
-    source_endpoint: str = DEFAULT_CLIENT_ENDPOINT_ID,
-    target_endpoint: str = DEFAULT_JAVA_ENDPOINT_ID,
-) -> BridgeFrame:
-    return build_maid_agent_turn_complete_frame(
-        turn_id=turn_id,
-        maid_uuid=maid_uuid,
-        outcome="no_reply",
-        reason=reason,
-        deadline_ms=deadline_ms,
-        trace_id=trace_id,
-        reply_to=reply_to,
-        source_endpoint=source_endpoint,
-        target_endpoint=target_endpoint,
-    )

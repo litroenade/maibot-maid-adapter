@@ -1,12 +1,9 @@
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping
 from typing import Any
 
-from ..config import DEFAULT_REPLY_GENERATION_MAX_TOKENS, DEFAULT_REPLY_GENERATION_TEMPERATURE
-from .prompt_loader import render_prompt
-from .utils import first_non_blank
+from ..prompt_loader import render_prompt
+from ..utils import first_non_blank
 
 
 async def generate_external_reply(
@@ -28,12 +25,15 @@ async def generate_external_reply(
         planned_actions=planned_actions or [],
         action_error=action_error,
     )
-    result = await ctx.llm.generate(
-        prompt,
-        model=str(getattr(settings, "reply_generation_model", "") or ""),
-        temperature=float(getattr(settings, "reply_generation_temperature", DEFAULT_REPLY_GENERATION_TEMPERATURE)),
-        max_tokens=int(getattr(settings, "reply_generation_max_tokens", DEFAULT_REPLY_GENERATION_MAX_TOKENS)),
-    )
+    try:
+        result = await ctx.llm.generate(
+            prompt,
+            model=settings.reply_generation_model,
+            temperature=float(settings.reply_generation_temperature),
+            max_tokens=int(settings.reply_generation_max_tokens),
+        )
+    except Exception as exc:
+        return {"success": False, "error": f"回复生成能力调用失败：{exc}"}
     if not isinstance(result, Mapping):
         return {"success": False, "error": "回复生成器返回了非对象结果"}
     if result.get("success") is False:

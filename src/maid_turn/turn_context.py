@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -7,9 +5,9 @@ from hashlib import md5
 from time import time
 from typing import Any
 
-from .constants import PLATFORM
-from .protocol.frame import BridgeFrame, BridgeProtocolError
-from .utils import first_non_blank
+from ..constants import PLATFORM
+from ..protocol.frame import BridgeFrame, BridgeProtocolError
+from ..utils import first_non_blank
 
 
 @dataclass(frozen=True)
@@ -32,7 +30,7 @@ class TurnContext:
 
 def parse_turn_context(frame: BridgeFrame, settings: Any, *, bot_name: str = "") -> TurnContext:
     if frame.type != "maid.agent.turn.request":
-        raise BridgeProtocolError(f"不支持的女仆 agent 轮次帧类型：{frame.type}")
+        raise BridgeProtocolError(f"不支持的女仆回合帧类型：{frame.type}")
     payload = frame.payload
     turn_id = first_non_blank(payload.get("turn_id"), frame.request_id, frame.id)
     maid = _mapping(payload.get("maid"))
@@ -48,16 +46,16 @@ def parse_turn_context(frame: BridgeFrame, settings: Any, *, bot_name: str = "")
     scope = f"maid:{maid_uuid}"
     resolved_bot_name = first_non_blank(
         bot_name,
-        getattr(settings, "agent_id", ""),
-        "maibot",
+        settings.agent_id,
     )
+    speaker_uuid = first_non_blank(speaker.get("uuid"), speaker.get("source_member_id"), turn_id)
     return TurnContext(
         frame=frame,
         turn_id=turn_id,
         maid_uuid=maid_uuid,
         bot_name=resolved_bot_name,
-        speaker_uuid=first_non_blank(speaker.get("uuid"), speaker.get("source_member_id"), "minecraft-user"),
-        speaker_name=first_non_blank(speaker.get("name"), speaker.get("nickname"), "Player"),
+        speaker_uuid=speaker_uuid,
+        speaker_name=first_non_blank(speaker.get("name"), speaker.get("nickname"), speaker_uuid),
         text=text,
         scope=scope,
         session_id=_maisaka_session_id(
@@ -80,6 +78,8 @@ def build_maibot_message(context: TurnContext) -> dict[str, Any]:
         "platform_io_scope": context.scope,
         "maidbridge_turn_id": context.turn_id,
         "maid_uuid": context.maid_uuid,
+        # MaidBridge turn 已经是玩家对女仆的直接聊天，不再依赖昵称识别触发 Maisaka。
+        "is_mentioned": 1.0,
         "bot_name": context.bot_name,
         "minecraft_channel_id": context.scope,
         "minecraft_channel_name": context.bot_name,
@@ -106,6 +106,8 @@ def build_maibot_message(context: TurnContext) -> dict[str, Any]:
         },
         "raw_message": [{"type": "text", "data": context.text}],
         "processed_plain_text": context.text,
+        "is_mentioned": True,
+        "is_at": False,
         "session_id": context.session_id,
     }
 

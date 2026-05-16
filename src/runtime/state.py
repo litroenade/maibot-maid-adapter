@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from time import time
 from typing import Any
 
+from ..constants import CAPABILITY_EXTERNAL_AGENT_EMOJI
+
 
 @dataclass(frozen=True)
 class PendingRequest:
@@ -77,3 +79,20 @@ class BridgeRuntimeState:
             "features": dict(features),
             "capabilities": dict(capabilities),
         }
+
+    def endpoint_flag(self, name: str, *, default: bool = False) -> bool:
+        for endpoint in self.endpoints.values():
+            value = _mapping_value(endpoint.get("capabilities"), name)
+            if value is not None:
+                return bool(value)
+            value = _mapping_value(endpoint.get("features"), name)
+            if value is not None:
+                return bool(value)
+        return default
+
+    def external_emoji_enabled(self) -> bool:
+        return self.endpoint_flag(CAPABILITY_EXTERNAL_AGENT_EMOJI, default=False)
+
+
+def _mapping_value(value: Any, key: str) -> Any | None:
+    return value.get(key) if isinstance(value, dict) and key in value else None

@@ -1,158 +1,261 @@
 import asyncio
 import contextlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .constants import ADAPTER_STATE_NAME, PLATFORM, PROTOCOL
-from .agent_turn import MaidAgentTurnService
+from ..config import DEFAULT_AGENT_ID
+from .constants import ADAPTER_STATE_NAME, PLATFORM, PROTOCOL, WEBSOCKET_ROLE
+from .maid_turn.turn_service import MaidTurnService
 from .protocol.frame import build_session_initialize_frame
-from .runtime.builder import build_runtime_bundle
 from .runtime.runtime_router import RuntimeRouter
-from .runtime.state import PendingRequest
-from .transport import AioHttpWebSocketBridgeTransport, BridgeTransport
-from .utils import first_non_blank, reconnect_attempt
+from .runtime.state import BridgeRuntimeState, PendingRequest
+from .transport import AioHttpWebSocketBridgeTransport
+from .utils import first_non_blank
 
 
 class MaidBridgeConnection:
+    if TYPE_CHECKING:
+        _state: BridgeRuntimeState
+        _transport: AioHttpWebSocketBridgeTransport | None
+        _router: RuntimeRouter | None
+        _maid_turn_service: MaidTurnService | None
+        _runtime_task: asyncio.Task[None] | None
+        _runtime_stop_event: asyncio.Event | None
+        _runtime_closed_event: asyncio.Event | None
+        _runtime_generation: int
+        _reconnect_attempts: int
+        _bot_name: str
+
+        @property
+        def ctx(self) -> Any:
+            raise NotImplementedError
+
+        def _settings(self) -> Any:
+            raise NotImplementedError
+
+        async def _send_frame(self, frame: Any) -> None:
+            raise NotImplementedError
+
+        async def _send_frame_await_reply(self, frame: Any, *, settings: Any) -> dict[str, Any]:
+            raise NotImplementedError
+
     async def _start_runtime(
         self,
         settings: Any,
         *,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        metadata = metadata or {}
-        attempt = reconnect_attempt(metadata)
-        if attempt:
-            self.ctx.logger.debug(
-                f"MaidBridge 正在执行重连尝试 [attempt={attempt}, "
-                f"max_attempts={settings.reconnect_max_attempts}, url={self._websocket_url(settings)}]"
-            )
-        else:
-            self.ctx.logger.info(
-                f"MaidBridge 正在连接 [url={self._websocket_url(settings)}, "
-                f"message_out_events={settings.enable_message_out_events}, "
-                f"maid_agent_turns={settings.enable_maid_agent_turns}]"
-            )
+        await self._stop_runtime()
+        self._runtime_stop_event = asyncio.Event()
+        self._reconnect_attempts = 0
+        self._runtime_task = asyncio.create_task(self._runtime_loop(settings, dict(metadata or {})))
+
+    async def _stop_runtime(self) -> None:
+        stop_event = self._runtime_stop_event
+        if stop_event is not None:
+            stop_event.set()
+
+        task = self._runtime_task
+        self._runtime_task = None
+        self._runtime_generation += 1
+        closed_event = self._runtime_closed_event
+        if closed_event is not None:
+            closed_event.set()
+
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+        await self._teardown_runtime(reason="runtime_stopped", publish=False)
+
+    async def _runtime_loop(self, settings: Any, metadata: dict[str, Any]) -> None:
+        reconnect_index = 0
+        last_reason = "runtime_start"
+        last_error = ""
+        try:
+            while self._runtime_should_run(settings):
+                if reconnect_index > 0:
+                    delay_ms = self._reconnect_delay_ms(settings, reconnect_index)
+                    self.ctx.logger.warning(
+                        f"MaidBridge WebSocket 将重连 [attempt={reconnect_index}, delay_ms={delay_ms}, "
+                        f"url={settings.websocket_url}, reason={last_reason}, error={last_error}]"
+                    )
+                    if await self._wait_for_stop(delay_ms):
+                        return
+
+                self._reconnect_attempts = max(0, reconnect_index)
+                generation = self._next_runtime_generation()
+                self._runtime_closed_event = asyncio.Event()
+                attempt_metadata = dict(metadata)
+                if reconnect_index > 0:
+                    attempt_metadata.update(
+                        {
+                            "reconnect_attempt": reconnect_index,
+                            "last_reason": last_reason,
+                        }
+                    )
+
+                try:
+                    await self._connect_once(settings, generation=generation, metadata=attempt_metadata)
+                    reconnect_index = 1
+                    last_reason = "transport_closed"
+                    last_error = ""
+                    await self._wait_until_current_transport_closes()
+                    if not self._runtime_should_run(settings):
+                        return
+                    await self._teardown_runtime(reason="transport_closed", publish=True)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    last_reason = "transport_start_failed"
+                    last_error = str(exc)
+                    await self._teardown_runtime(reason=last_reason, error=last_error, publish=True)
+                    reconnect_index += 1
+        finally:
+            await self._teardown_runtime(reason="runtime_stopped", publish=False)
+
+    async def _connect_once(self, settings: Any, *, generation: int, metadata: dict[str, Any]) -> None:
+        self.ctx.logger.info(
+            f"MaidBridge 正在连接 [url={settings.websocket_url}, "
+            f"maid_turns={settings.enable_maid_agent_turns}]"
+        )
         bot_name = await self._resolve_bot_name(settings)
         self._bot_name = bot_name
-        transport = self._build_transport(settings)
-        transport.on_open(lambda: self._handle_transport_open(settings, metadata=metadata))
-        transport.on_close(lambda: self._handle_transport_close(settings))
-        maid_agent_turn_handler = (
-            MaidAgentTurnService(
+        maid_uuid = first_non_blank(settings.maid_uuid)
+        if not maid_uuid:
+            raise RuntimeError("MaidAdapter 必须填写女仆 UUID")
+
+        transport = AioHttpWebSocketBridgeTransport(
+            settings.websocket_url,
+            access_token=settings.access_token,
+            max_message_bytes=settings.max_message_bytes,
+        )
+        transport.on_close(lambda: self._mark_transport_closed(generation))
+        maid_turn_handler = (
+            MaidTurnService(
                 ctx=self.ctx,
                 settings=settings,
-                state=self._state,
                 send_frame=self._send_frame,
                 bot_name=bot_name,
             )
             if settings.enable_maid_agent_turns
             else None
         )
-        self._maid_agent_turn_service = maid_agent_turn_handler
         router = RuntimeRouter(
-            build_runtime_bundle(
-                ctx=self.ctx,
-                transport=transport,
-                state=self._state,
-                max_message_bytes=settings.max_message_bytes,
-                enable_message_out_events=settings.enable_message_out_events,
-                maid_agent_turn_handler=maid_agent_turn_handler,
-            )
+            ctx=self.ctx,
+            transport=transport,
+            state=self._state,
+            max_message_bytes=settings.max_message_bytes,
+            maid_turn_handler=maid_turn_handler,
         )
+
         self._transport = transport
         self._router = router
-        try:
-            await router.start()
-        except Exception as exc:
-            if attempt:
-                self.ctx.logger.debug(f"MaidBridge 重连尝试失败 [attempt={attempt}, error={exc}]")
-            # 游戏端和 MaiBot 端经常分开启动，首次连接失败不能阻塞插件 API/配置页注册。
-            with contextlib.suppress(Exception):
-                await transport.stop()
-            self._transport = None
-            self._router = None
-            self._state.mark_disconnected()
-            await self._publish_adapter_state(
-                runtime_connected=False,
-                metadata={
-                    "enabled": True,
-                    "reason": "transport_start_failed",
-                    "error": str(exc),
-                },
-            )
-            await self._schedule_reconnect(settings, reason="transport_start_failed", error=str(exc))
-            return
+        self._maid_turn_service = maid_turn_handler
+        await router.start()
+        await self._send_session_initialize(settings)
+
+        connection_id = f"{settings.server_id}@{settings.websocket_url}"
+        self._state.mark_connected(server_id=settings.server_id, connection_id=connection_id)
         self._reconnect_attempts = 0
-        if self._reconnect_task is asyncio.current_task():
-            self._reconnect_task = None
-        if attempt:
-            self.ctx.logger.info(
-                f"MaidBridge 运行时已在重连后就绪 [attempt={attempt}, url={self._websocket_url(settings)}]"
-            )
-        else:
-            self.ctx.logger.info(f"MaidBridge 运行时已就绪 [url={self._websocket_url(settings)}]")
+        self.ctx.logger.info(
+            f"MaidBridge 运行时已就绪 [url={settings.websocket_url}, connection_id={connection_id}]"
+        )
+        await self._publish_adapter_state(
+            runtime_connected=True,
+            metadata={
+                "enabled": True,
+                "connection_id": connection_id,
+                "websocket_role": WEBSOCKET_ROLE,
+                **metadata,
+            },
+        )
 
-    async def _stop_runtime(self) -> None:
-        service = getattr(self, "_maid_agent_turn_service", None)
-        if service is not None:
-            service.cancel_pending("MaidBridge 适配器运行时已停止")
-        self._maid_agent_turn_service = None
-        phase_store = getattr(self, "_maid_request_phase_by_session", None)
-        if isinstance(phase_store, dict):
-            phase_store.clear()
-        if self._router is not None:
-            await self._router.stop()
-        self._router = None
-        self._transport = None
-
-    async def _schedule_reconnect(
+    async def _teardown_runtime(
         self,
-        settings: Any,
         *,
         reason: str,
         error: str = "",
+        publish: bool,
     ) -> None:
-        if self._reconnect_stopped or not settings.enabled:
-            return
-        task = self._reconnect_task
-        if task is not None and not task.done() and task is not asyncio.current_task():
-            return
-        max_attempts = max(0, settings.reconnect_max_attempts)
-        if self._reconnect_attempts >= max_attempts:
-            self.ctx.logger.error(
-                f"MaidBridge 重连已停止：重试次数耗尽 [attempts={self._reconnect_attempts}, "
-                f"max_attempts={max_attempts}, url={self._websocket_url(settings)}, "
-                f"reason={reason}, error={error}]"
-            )
+        router = self._router
+        transport = self._transport
+        service = self._maid_turn_service
+        self._router = None
+        self._transport = None
+        self._maid_turn_service = None
+
+        if service is not None:
+            service.cancel_pending(error or "MaidBridge 传输层已关闭")
+
+        if router is not None:
+            with contextlib.suppress(Exception):
+                await router.stop()
+        if transport is not None:
+            with contextlib.suppress(Exception):
+                await transport.stop()
+
+        pending = self._state.mark_disconnected()
+        self._complete_pending_requests(pending, error=error or "MaidBridge 传输层已关闭")
+
+        if publish:
             await self._publish_adapter_state(
                 runtime_connected=False,
                 metadata={
                     "enabled": True,
-                    "reason": "transport_reconnect_exhausted",
-                    "last_reason": reason,
-                    "attempts": self._reconnect_attempts,
-                    "max_attempts": max_attempts,
+                    "reason": reason,
                     "error": error,
                 },
             )
+
+    async def _wait_for_stop(self, delay_ms: int) -> bool:
+        stop_event = self._runtime_stop_event
+        if stop_event is None:
+            return True
+        if delay_ms <= 0:
+            return stop_event.is_set()
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=delay_ms / 1000)
+            return True
+        except TimeoutError:
+            return False
+
+    async def _wait_until_current_transport_closes(self) -> None:
+        stop_event = self._runtime_stop_event
+        closed_event = self._runtime_closed_event
+        if stop_event is None or closed_event is None:
             return
-        self._reconnect_attempts += 1
-        attempt = self._reconnect_attempts
-        delay_ms = self._reconnect_delay_ms(settings, attempt)
-        if attempt == 1:
-            self.ctx.logger.warning(
-                f"MaidBridge Java 服务不可达，已安排重试 [next_attempt={attempt}, "
-                f"max_attempts={max_attempts}, delay_ms={delay_ms}, "
-                f"url={self._websocket_url(settings)}, reason={reason}, error={error}]"
-            )
-        else:
-            self.ctx.logger.debug(
-                f"MaidBridge 已安排重试 [next_attempt={attempt}, max_attempts={max_attempts}, "
-                f"delay_ms={delay_ms}, reason={reason}, error={error}]"
-            )
-        self._reconnect_task = asyncio.create_task(
-            self._run_reconnect(settings, attempt=attempt, delay_ms=delay_ms)
-        )
+        stop_task = asyncio.create_task(stop_event.wait())
+        close_task = asyncio.create_task(closed_event.wait())
+        try:
+            await asyncio.wait({stop_task, close_task}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stop_task.cancel()
+            close_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await close_task
+
+    def _runtime_should_run(self, settings: Any) -> bool:
+        stop_event = self._runtime_stop_event
+        return bool(settings.enabled) and not (stop_event is None or stop_event.is_set())
+
+    def _next_runtime_generation(self) -> int:
+        self._runtime_generation += 1
+        return self._runtime_generation
+
+    def _mark_transport_closed(self, generation: int) -> None:
+        if generation != self._runtime_generation:
+            return
+        closed_event = self._runtime_closed_event
+        if closed_event is not None:
+            closed_event.set()
+
+    def _mark_transport_unhealthy(self) -> None:
+        closed_event = self._runtime_closed_event
+        if closed_event is not None:
+            closed_event.set()
 
     def _reconnect_delay_ms(self, settings: Any, attempt: int) -> int:
         initial_delay_ms = max(0, settings.reconnect_initial_delay_ms)
@@ -160,84 +263,14 @@ class MaidBridgeConnection:
         uncapped_delay_ms = initial_delay_ms * (2 ** max(0, attempt - 1))
         return min(uncapped_delay_ms, max_delay_ms) if max_delay_ms else uncapped_delay_ms
 
-    async def _run_reconnect(
-        self,
-        settings: Any,
-        *,
-        attempt: int,
-        delay_ms: int,
-    ) -> None:
-        try:
-            if delay_ms:
-                await asyncio.sleep(delay_ms / 1000)
-            if self._reconnect_stopped or not settings.enabled:
-                return
-            await self._start_runtime(settings, metadata={"reconnect_attempt": attempt})
-        except asyncio.CancelledError:
-            self.ctx.logger.info(f"MaidBridge 重连已取消 [attempt={attempt}]")
-            raise
-        finally:
-            if self._reconnect_task is asyncio.current_task():
-                self._reconnect_task = None
-
-    async def _cancel_reconnect_task(self, reason: str) -> None:
-        task = self._reconnect_task
-        self._reconnect_task = None
-        self._reconnect_attempts = 0
-        if task is None or task.done():
-            return
-        task.cancel()
-        self.ctx.logger.info(f"MaidBridge 重连任务已取消 [reason={reason}]")
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    def _build_transport(self, settings: Any) -> BridgeTransport:
-        if self._transport_factory is not None:
-            return self._transport_factory(settings)
-        return AioHttpWebSocketBridgeTransport(
-            settings.websocket_url,
-            access_token=settings.access_token,
-            max_message_bytes=settings.max_message_bytes,
-        )
-
-    def _websocket_role(self, settings: Any) -> str:
-        del settings
-        return "client"
-
-    def _websocket_url(self, settings: Any) -> str:
-        return settings.websocket_url
-
-    async def _handle_transport_open(
-        self,
-        settings: Any,
-        *,
-        metadata: dict[str, Any],
-    ) -> None:
-        connection_id = f"{settings.server_id}@{self._websocket_url(settings)}"
-        self.ctx.logger.info(
-            f"MaidBridge WebSocket 已连接 [url={self._websocket_url(settings)}, connection_id={connection_id}]"
-        )
-        await self._send_session_initialize(settings)
-        self._state.mark_connected(server_id=settings.server_id, connection_id=connection_id)
-        await self._publish_adapter_state(
-            runtime_connected=True,
-            metadata={
-                "enabled": True,
-                "enable_message_out_events": bool(settings.enable_message_out_events),
-                "connection_id": connection_id,
-                "websocket_role": self._websocket_role(settings),
-                **metadata,
-            },
-        )
-
     async def _send_session_initialize(self, settings: Any) -> None:
         if self._transport is None:
             return
-        bot_name = first_non_blank(getattr(self, "_bot_name", ""), settings.agent_id, "maibot")
+        bot_name = first_non_blank(self._bot_name, settings.agent_id, DEFAULT_AGENT_ID)
         frame = build_session_initialize_frame(
-            client_id=f"{settings.server_id}@{self._websocket_url(settings)}",
-            # Java 端历史字段仍叫 agent_id/client_name，这里承载的是 MaiBot 本体显示名。
-            agent_id=bot_name,
+            client_id=f"{settings.server_id}@{settings.websocket_url}",
+            agent_id=settings.agent_id,
+            agent_name=bot_name,
             roles=settings.client_roles,
             subscriptions=settings.subscriptions,
             deadline_ms=settings.request_timeout_ms,
@@ -254,6 +287,7 @@ class MaidBridgeConnection:
             raise RuntimeError(f"MaidBridge 会话初始化被拒绝：{error}")
         self.ctx.logger.info(
             f"MaidBridge 握手完成 [request_id={frame.request_id}, reply_type={reply_type}, "
+            f"agent_id={settings.agent_id}, agent_name={bot_name}, "
             f"roles={len(settings.client_roles)}, subscriptions={len(settings.subscriptions)}]"
         )
 
@@ -263,47 +297,31 @@ class MaidBridgeConnection:
         except Exception as exc:
             self.ctx.logger.debug(f"MaidBridge 读取 MaiBot 本体昵称失败，使用配置回退值 [error={exc}]")
             nickname = ""
-        return first_non_blank(nickname, settings.agent_id, "maibot")
+        return first_non_blank(nickname, settings.agent_id, DEFAULT_AGENT_ID)
 
-    async def _handle_transport_close(self, settings: Any) -> None:
-        pending = self._state.mark_disconnected()
-        if self._reconnect_stopped or not settings.enabled:
-            self.ctx.logger.debug(f"MaidBridge WebSocket 因运行时停止而关闭 [pending={len(pending)}]")
-        else:
-            self.ctx.logger.warning(
-                f"MaidBridge WebSocket 已断开，将安排重连 [url={self._websocket_url(settings)}, "
-                f"pending={len(pending)}]"
-            )
-        self._complete_pending_requests(pending, error="MaidBridge 传输层已关闭")
-        service = getattr(self, "_maid_agent_turn_service", None)
-        if service is not None:
-            service.cancel_pending("MaidBridge 传输层已关闭")
-        await self._publish_adapter_state(runtime_connected=False, metadata={"reason": "transport_closed"})
-        self._router = None
-        self._transport = None
-        await self._schedule_reconnect(settings, reason="transport_closed")
+    def _bot_name_from_config(self, config_data: dict[str, Any]) -> str:
+        bot_config = config_data.get("bot")
+        if isinstance(bot_config, dict):
+            return first_non_blank(bot_config.get("nickname"))
+        return first_non_blank(config_data.get("bot.nickname"))
 
     async def _publish_adapter_state(self, *, runtime_connected: bool, metadata: dict[str, Any]) -> None:
         settings = self._settings()
         await self.ctx.gateway.update_state(
             ADAPTER_STATE_NAME,
-            # MaiBot SDK 的网关状态边界固定读取 ready 参数。
             ready=runtime_connected,
             platform=PLATFORM,
-            account_id="",
+            account_id=settings.maid_uuid,
             scope="",
             metadata={
                 "protocol": PROTOCOL,
                 "server_id": settings.server_id,
-                "websocket_role": self._websocket_role(settings),
-                "websocket_url": self._websocket_url(settings),
-                "enable_message_out_events": bool(settings.enable_message_out_events),
+                "websocket_role": WEBSOCKET_ROLE,
+                "websocket_url": settings.websocket_url,
+                "reconnect_attempts": self._reconnect_attempts,
                 **metadata,
             },
         )
-
-    def _pending_request(self, **kwargs: Any) -> PendingRequest:
-        return PendingRequest(**kwargs)
 
     def _complete_pending_requests(self, pending: list[PendingRequest], *, error: str) -> None:
         completed = 0

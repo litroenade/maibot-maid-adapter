@@ -2,11 +2,10 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-SUPPORTED_CONFIG_VERSION = "0.3.4"
+SUPPORTED_CONFIG_VERSION = "0.3.10"
 DEFAULT_SERVER_ID = "minecraft-local"
 DEFAULT_AGENT_ID = "maibot"
 DEFAULT_JAVA_SERVER_URI = "ws://127.0.0.1:8765/maidbridge"
-DEFAULT_MAID_CHANNEL_NAME = "maid"
 DEFAULT_CLIENT_ROLES = ["maid_api_query", "maid_api_call", "debug"]
 DEFAULT_SUBSCRIPTIONS = [
     "maid.ai.*",
@@ -15,9 +14,9 @@ DEFAULT_SUBSCRIPTIONS = [
     "maidbridge.server.*",
 ]
 DEFAULT_REQUEST_TIMEOUT_MS = 30000
-DEFAULT_MAX_MESSAGE_BYTES = 32768
+DEFAULT_MAX_MESSAGE_BYTES = 32 * 1024 * 1024
+MAX_MESSAGE_BYTES_LIMIT = 64 * 1024 * 1024
 DEFAULT_MAX_PENDING_MAID_AGENT_TURNS = 256
-DEFAULT_RECONNECT_MAX_ATTEMPTS = 5
 DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1000
 DEFAULT_RECONNECT_MAX_DELAY_MS = 30000
 DEFAULT_REPLY_GENERATION_MODEL = "replyer"
@@ -37,7 +36,7 @@ class MaidAdapterPluginOptions(PluginConfigBase):
         description="是否启用 MaiBot 女仆适配器运行时。",
         json_schema_extra={
             "label": "启用插件",
-            "hint": "关闭后插件仍会注册 API，但不会启动 MaidBridge WebSocket 运行时。",
+            "hint": "关闭后不会连接 Minecraft。",
             "order": 0,
         },
     )
@@ -55,46 +54,44 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
 
     enable_maid_agent_turns: bool = Field(
         default=True,
-        description="是否处理 MaidBridge 发来的 maid.agent.turn.request。",
-        json_schema_extra={"label": "启用女仆 agent 接管", "order": 0},
+        json_schema_extra={
+            "label": "接管女仆聊天",
+            "order": 0,
+        },
     )
-    default_maid_uuid: str = Field(
+    maid_uuid: str = Field(
         default="",
-        description="maid_query、maid_call、maid_message 未显式传 maid.uuid 时使用的默认女仆 UUID。",
-        json_schema_extra={"label": "默认女仆 UUID", "order": 1, "placeholder": "可选"},
-    )
-    maid_channel_name: str = Field(
-        default=DEFAULT_MAID_CHANNEL_NAME,
-        description="兼容旧版配置；外部接管会话显示名优先使用 MaiBot 本体昵称。",
-        json_schema_extra={"label": "兼容女仆频道名", "order": 2, "placeholder": DEFAULT_MAID_CHANNEL_NAME},
+        description="要接管的女仆 UUID，同时作为 minecraft 平台路由账号。",
+        json_schema_extra={
+            "label": "女仆 UUID",
+            "hint": "插件会用该 UUID 注册 minecraft 路由状态，不再动态改写 MaiBot 全局平台配置。",
+            "order": 1,
+            "placeholder": "填写女仆 UUID",
+        },
     )
     server_id: str = Field(
         default=DEFAULT_SERVER_ID,
-        description="适配器向 Java MaidBridge 声明的客户端服务 ID。",
-        json_schema_extra={"label": "客户端服务 ID", "order": 3, "placeholder": DEFAULT_SERVER_ID},
+        description="当前连接的内部 ID。",
+        json_schema_extra={
+            "label": "连接 ID",
+            "hint": "单个 MaiBot 实例保持默认即可。",
+            "order": 3,
+            "placeholder": DEFAULT_SERVER_ID,
+        },
     )
     agent_id: str = Field(
         default=DEFAULT_AGENT_ID,
-        description="适配器向 Java MaidBridge 声明的兼容标识；MaiBot 本体昵称读取失败时作为回退值。",
+        description="外部接管方的稳定协议标识符。",
         json_schema_extra={
-            "label": "兼容 agent 标识",
-            "hint": "游戏内显示名优先取 MaiBot 全局配置 bot.nickname；这里主要用于连接调试和回退。",
+            "label": "外部接管标识符",
+            "hint": "Minecraft 显示名称优先使用 MaiBot bot.nickname；未配置昵称时才回退到这里。",
             "order": 4,
             "placeholder": DEFAULT_AGENT_ID,
         },
     )
-    enable_message_out_events: bool = Field(
-        default=False,
-        description="是否订阅 maid.message.out 观察事件。",
-        json_schema_extra={
-            "label": "启用女仆输出事件",
-            "hint": "这里只观察 MaidBridge maid.message.out 帧，不会调用其他适配器插件。",
-            "order": 5,
-        },
-    )
     server_uri: str = Field(
         default=DEFAULT_JAVA_SERVER_URI,
-        description="Java MaidBridge WebSocket 服务地址。",
+        description="Minecraft 侧 MaidBridge 的连接地址。",
         json_schema_extra={
             "label": "Java MaidBridge 地址",
             "order": 6,
@@ -103,17 +100,23 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
     )
     access_token: str = Field(
         default="",
-        description="和 Java MaidBridge 共用的 Bearer Token。",
-        json_schema_extra={"label": "访问令牌", "input_type": "password", "order": 7, "placeholder": "可选"},
+        description="连接需要的访问令牌。",
+        json_schema_extra={
+            "label": "访问令牌",
+            "hint": "没有启用鉴权就留空。",
+            "input_type": "password",
+            "order": 7,
+            "placeholder": "可选",
+        },
     )
     max_message_bytes: int = Field(
         default=DEFAULT_MAX_MESSAGE_BYTES,
         ge=1024,
-        le=1048576,
-        description="单个 WebSocket frame 最大字节数。",
+        le=MAX_MESSAGE_BYTES_LIMIT,
+        description="单条 MaidBridge 消息允许的最大字节数。",
         json_schema_extra={
-            "label": "最大消息字节数",
-            "hint": "需要和 Java MaidBridge 的 maxBridgeMessageBytes 保持兼容。",
+            "label": "单条消息大小上限",
+            "hint": "外部高清表情包和 GIF 会占用较大的帧空间，需要与 Java 侧保持一致。",
             "order": 8,
         },
     )
@@ -121,18 +124,12 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         default=DEFAULT_REQUEST_TIMEOUT_MS,
         ge=1000,
         le=300000,
-        description="等待 Java 领域响应或握手响应的超时时间。",
+        description="等待 Java 端回复的最长时间。",
         json_schema_extra={
             "label": "请求超时毫秒",
-            "hint": "用于 bridge.session.ready、maid.api.response、maid.message.response 等需要响应的请求。",
+            "hint": "网络较慢时可以调大。",
             "order": 9,
         },
-    )
-    reconnect_max_attempts: int = Field(
-        default=DEFAULT_RECONNECT_MAX_ATTEMPTS,
-        ge=0,
-        description="WebSocket 启动失败或断开后的后台重连次数上限。",
-        json_schema_extra={"label": "最大重连次数", "order": 10},
     )
     reconnect_initial_delay_ms: int = Field(
         default=DEFAULT_RECONNECT_INITIAL_DELAY_MS,
@@ -150,10 +147,10 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         default=DEFAULT_MAX_PENDING_MAID_AGENT_TURNS,
         ge=1,
         le=4096,
-        description="女仆 agent 轮次在适配器内等待或处理中时允许保留的总数。",
+        description="同一时间允许保留的女仆消息处理数量。",
         json_schema_extra={
-            "label": "待处理女仆轮次上限",
-            "hint": "同一 Maisaka 会话仍会按顺序注入 MaiBot；该上限只用于防止异常堆积。",
+            "label": "待处理消息上限",
+            "hint": "防止异常堆积，一般保持默认。",
             "order": 13,
         },
     )
@@ -187,10 +184,10 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
     )
     enable_agent_emoji_bubbles: bool = Field(
         default=True,
-        description="是否允许动作规划器按外部 agent 意愿请求 Java 侧附加女仆表情气泡。",
+        description="是否允许动作规划器请求 Java 侧 TLM 原生表情或颜文字气泡。",
         json_schema_extra={
-            "label": "启用表情气泡规划",
-            "hint": "只有 Java MaidBridge 暴露 show_emoji_bubble action 时才会实际生效。",
+            "label": "启用 TLM 表情气泡规划",
+            "hint": "MaiBot 原生 send_emoji 会由插件直桥为外部图片气泡，并受 Java capability 控制。",
             "order": 18,
         },
     )
@@ -236,10 +233,6 @@ class MaiBotMaidAdapterSettings(PluginConfigBase):
         return self.maid_adapter.agent_id.strip() or DEFAULT_AGENT_ID
 
     @property
-    def websocket_role(self) -> str:
-        return "client"
-
-    @property
     def websocket_url(self) -> str:
         return self.maid_adapter.server_uri.strip() or DEFAULT_JAVA_SERVER_URI
 
@@ -256,10 +249,6 @@ class MaiBotMaidAdapterSettings(PluginConfigBase):
         return self.maid_adapter.request_timeout_ms
 
     @property
-    def reconnect_max_attempts(self) -> int:
-        return self.maid_adapter.reconnect_max_attempts
-
-    @property
     def reconnect_initial_delay_ms(self) -> int:
         return self.maid_adapter.reconnect_initial_delay_ms
 
@@ -273,38 +262,23 @@ class MaiBotMaidAdapterSettings(PluginConfigBase):
 
     @property
     def client_roles(self) -> list[str]:
-        roles: list[str] = []
         if self.enable_maid_agent_turns:
-            roles.append("agent")
-        if self.enable_message_out_events:
-            roles.append("message")
-        return _normalized_unique(roles, DEFAULT_CLIENT_ROLES)
+            return ["agent", *DEFAULT_CLIENT_ROLES]
+        return list(DEFAULT_CLIENT_ROLES)
 
     @property
     def subscriptions(self) -> list[str]:
-        subscriptions: list[str] = []
         if self.enable_maid_agent_turns:
-            subscriptions.append("maid.agent.turn.request")
-        subscriptions.extend(DEFAULT_SUBSCRIPTIONS)
-        if self.enable_message_out_events:
-            subscriptions.append("maid.message.out")
-        return _normalized_unique(subscriptions)
-
-    @property
-    def enable_message_out_events(self) -> bool:
-        return self.maid_adapter.enable_message_out_events
+            return ["maid.agent.turn.request", *DEFAULT_SUBSCRIPTIONS]
+        return list(DEFAULT_SUBSCRIPTIONS)
 
     @property
     def enable_maid_agent_turns(self) -> bool:
         return self.maid_adapter.enable_maid_agent_turns
 
     @property
-    def default_maid_uuid(self) -> str:
-        return self.maid_adapter.default_maid_uuid.strip()
-
-    @property
-    def maid_channel_name(self) -> str:
-        return self.maid_adapter.maid_channel_name.strip() or DEFAULT_MAID_CHANNEL_NAME
+    def maid_uuid(self) -> str:
+        return self.maid_adapter.maid_uuid.strip()
 
     @property
     def reply_generation_model(self) -> str:
@@ -337,16 +311,3 @@ class MaiBotMaidAdapterSettings(PluginConfigBase):
     @property
     def action_planning_max_tokens(self) -> int:
         return self.maid_adapter.action_planning_max_tokens
-
-
-def _normalized_unique(*groups: list[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for group in groups:
-        for item in group:
-            text = str(item or "").strip()
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            result.append(text)
-    return result

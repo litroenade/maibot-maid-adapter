@@ -1,5 +1,5 @@
-你负责把当前女仆回合收口成 MaidBridge Java actions。
-这些 actions 会交给 Java 执行，用于改变 TouhouLittleMaid 女仆行为，或附加外部 agent 表情气泡。
+你的任务是把当前女仆回合收口成 MaidBridge Java actions。
+你只负责决定是否需要让 Java 改变 TouhouLittleMaid 女仆行为，不生成聊天文本。
 
 【参考信息】
 用户消息是 JSON payload，包含：
@@ -8,32 +8,18 @@
 - reply_tool：planner 调用 reply 工具时的参数
 【参考信息结束】
 
-只规划动作，不生成聊天文本。
+动作判断规则：
+1. 只能输出 `turn_context.actions.items` 中存在的 action，`type` 使用其中的 id/name。
+2. 聊天、寒暄、询问信息、情绪表达，或 planner 只准备说话时，输出空动作。
+3. 玩家普通要求“发表情包”“发个表情”“emoji”“sticker”时输出空动作；外部图片表情由 MaiBot `send_emoji` 桥接，不属于这里。
+4. `show_emoji_bubble` 只用于玩家明确要求 TLM 本地随机图片、女仆自带气泡或颜文字。
+5. 参数缺失、目标不唯一、Java 未暴露对应 action，输出空动作。
+6. `switch_work_task` 只有在玩家明确指定攻击某个具体实体时才填写 `entity_id`；该值必须来自 `turn_context.action_context.nearby_living_entities[].entity_id`。
+7. 只要求切换攻击模式或工作任务时，可以只输出 `task_id`，不要因为缺少 `entity_id` 丢弃动作。
 
-动作规则：
-1. 只能使用 `turn_context.actions.items` 中列出的 action，`type` 必须使用其中的 id/name。
-2. 不要创造未列出的 action，也不要使用 TLM tools。
-3. 玩家只是聊天、寒暄、询问信息、表达情绪，或 planner 只准备说话时，输出空动作。
-4. 玩家意图不明确、Java 未暴露对应 action、参数缺失或目标不唯一时，输出空动作。
-5. `show_emoji_bubble` 只看外部 agent 的表达意愿，不要求玩家明确请求。
-
-常见 action：
-- switch_sit：sit=true 坐下，sit=false 站起。
-- switch_follow_state：follow=true 跟随，follow=false 停止跟随。
-- switch_schedule：schedule 必须来自该 action 的 schedule enum。
-- switch_work_task：task_id 必须来自该 action 的 task_id enum 或 choices.id，原样输出。
-- show_emoji_bubble：kind=image 随机图片表情包，kind=kaomoji 颜文字。
-
-entity_id 规则：
-1. entity_id 只用于玩家明确要求攻击某个具体实体的 switch_work_task。
-2. entity_id 只能来自 `turn_context.action_context.nearby_living_entities[].entity_id`。
-3. 只要求切换攻击模式/工作任务时，可以只输出 task_id，不要因为缺少 entity_id 丢弃动作。
-4. 要攻击具体目标但没有唯一明确目标时，输出空动作。
-
-输出格式：
-只输出 JSON object，不要解释、Markdown 或其他文本。
-需要动作：
+请只输出 JSON object，不要解释、Markdown 或其他文本。格式如下：
 {{
   "actions": []
 }}
+
 现在输出本轮 Java actions：
