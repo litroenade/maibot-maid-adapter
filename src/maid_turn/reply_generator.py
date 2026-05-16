@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from ..constants import MAIBOT_REPLYER_TASK
 from ..prompt_loader import render_prompt
 from ..utils import first_non_blank
 
@@ -17,6 +18,7 @@ async def generate_external_reply(
     planned_actions: list[dict[str, Any]] | None = None,
     action_error: str = "",
 ) -> dict[str, Any]:
+    _ = settings
     prompt = _reply_prompt(
         turn_context=turn_context,
         planner_reasoning=planner_reasoning,
@@ -26,12 +28,7 @@ async def generate_external_reply(
         action_error=action_error,
     )
     try:
-        result = await ctx.llm.generate(
-            prompt,
-            model=settings.reply_generation_model,
-            temperature=float(settings.reply_generation_temperature),
-            max_tokens=int(settings.reply_generation_max_tokens),
-        )
+        result = await ctx.llm.generate(prompt, model=MAIBOT_REPLYER_TASK)
     except Exception as exc:
         return {"success": False, "error": f"回复生成能力调用失败：{exc}"}
     if not isinstance(result, Mapping):

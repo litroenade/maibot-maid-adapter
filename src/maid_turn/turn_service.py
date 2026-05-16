@@ -67,13 +67,22 @@ class MaidTurnService:
 
     async def handle(self, frame: BridgeFrame) -> dict[str, Any]:
         context = parse_turn_context(frame, self._settings, bot_name=self._bot_name)
+        configured_maid_uuid = _first_non_blank(self._settings.maid_uuid)
+        if configured_maid_uuid and not _same_uuid(configured_maid_uuid, context.maid_uuid):
+            self._ctx.logger.warning(
+                f"MaidBridge 女仆回合已拒绝：maid.uuid 与当前 adapter 配置不匹配 "
+                f"[turn_id={context.turn_id}, trace_id={context.frame.trace_id}, "
+                f"request_maid_uuid={context.maid_uuid}, configured_maid_uuid={configured_maid_uuid}, "
+                f"session_id={context.session_id}, agent_id={self._settings.agent_id}, bot_name={context.bot_name}]"
+            )
+            return await self._send_context_no_reply(context, reason="maid_uuid_mismatch")
         loop = asyncio.get_running_loop()
         pending = _PendingTurn(context=context, future=loop.create_future())
         register_status = self._register_pending(pending)
         if register_status == _PENDING_DUPLICATE_TURN:
             self._ctx.logger.warning(
                 f"MaidBridge 女仆回合重复，已忽略重复帧 [turn_id={context.turn_id}, "
-                f"trace_id={context.frame.trace_id}]"
+                f"trace_id={context.frame.trace_id}, maid_uuid={context.maid_uuid}, session_id={context.session_id}]"
             )
             return {
                 "success": False,
@@ -83,7 +92,8 @@ class MaidTurnService:
         if register_status == _PENDING_QUEUE_FULL:
             self._ctx.logger.warning(
                 f"MaidBridge 女仆回合队列已满，按 no_reply 回写 Java [turn_id={context.turn_id}, "
-                f"trace_id={context.frame.trace_id}, max_pending={self._max_pending_turns()}]"
+                f"trace_id={context.frame.trace_id}, maid_uuid={context.maid_uuid}, "
+                f"session_id={context.session_id}, max_pending={self._max_pending_turns()}]"
             )
             return await self._send_context_no_reply(context, reason="maibot_pending_queue_full")
         try:
@@ -248,7 +258,8 @@ class MaidTurnService:
             error = f"MaidBridge 女仆回合 no_reply 发送失败：{exc}"
             self._ctx.logger.warning(
                 f"MaidBridge 女仆回合 no_reply 发送失败 [turn_id={context.turn_id}, "
-                f"trace_id={context.frame.trace_id}, reason={reason}, error={exc}]"
+                f"trace_id={context.frame.trace_id}, maid_uuid={context.maid_uuid}, "
+                f"session_id={context.session_id}, reason={reason}, error={exc}]"
             )
             return {"success": False, "external_message_id": context.turn_id, "outcome": "no_reply", "error": error}
         return {"success": True, "external_message_id": context.turn_id, "outcome": "no_reply", "reason": reason}
@@ -285,7 +296,8 @@ class MaidTurnService:
         error = f"MaidBridge 女仆回合终态帧发送失败：{exc}"
         self._ctx.logger.warning(
             f"MaidBridge 女仆回合终态帧发送失败 [turn_id={pending.context.turn_id}, "
-            f"trace_id={pending.context.frame.trace_id}, outcome={outcome}, error={exc}]"
+            f"trace_id={pending.context.frame.trace_id}, maid_uuid={pending.context.maid_uuid}, "
+            f"session_id={pending.context.session_id}, outcome={outcome}, error={exc}]"
         )
         result = {
             "success": False,
@@ -461,7 +473,7 @@ class MaidTurnService:
         try:
             self._ctx.logger.info(
                 f"MaidBridge 正在注入 MaiBot 消息循环 [turn_id={context.turn_id}, "
-                f"session_id={context.session_id}, scope={context.scope}]"
+                f"maid_uuid={context.maid_uuid}, session_id={context.session_id}, scope={context.scope}]"
             )
             accepted = await self._ctx.gateway.route_message(
                 gateway_name=self._gateway_name,
@@ -472,19 +484,25 @@ class MaidTurnService:
             )
             self._ctx.logger.info(
                 f"MaidBridge MaiBot 消息循环注入结果 [turn_id={context.turn_id}, "
-                f"session_id={context.session_id}, accepted={accepted}]"
+                f"maid_uuid={context.maid_uuid}, session_id={context.session_id}, accepted={accepted}]"
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             if not pending.future.done():
-                self._ctx.logger.warning(f"MaidBridge 注入 MaiBot gateway 失败，按 no_reply 回写 Java [error={exc}]")
+                self._ctx.logger.warning(
+                    f"MaidBridge 注入 MaiBot gateway 失败，按 no_reply 回写 Java [turn_id={context.turn_id}, "
+                    f"maid_uuid={context.maid_uuid}, session_id={context.session_id}, error={exc}]"
+                )
                 await self._complete_no_reply(pending, reason="maibot_gateway_error", actions=[])
             return
         if pending.future.done():
             return
         if not accepted:
-            self._ctx.logger.warning("MaidBridge 女仆回合被 MaiBot gateway 拒绝，按 no_reply 回写 Java")
+            self._ctx.logger.warning(
+                f"MaidBridge 女仆回合被 MaiBot gateway 拒绝，按 no_reply 回写 Java "
+                f"[turn_id={context.turn_id}, maid_uuid={context.maid_uuid}, session_id={context.session_id}]"
+            )
             await self._complete_no_reply(pending, reason="maibot_gateway_rejected", actions=[])
 
     def _external_id(self, context: TurnContext) -> str:
@@ -535,3 +553,9 @@ def _first_non_blank(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _same_uuid(left: Any, right: Any) -> bool:
+    normalized_left = _first_non_blank(left)
+    normalized_right = _first_non_blank(right)
+    return bool(normalized_left and normalized_right and normalized_left.casefold() == normalized_right.casefold())

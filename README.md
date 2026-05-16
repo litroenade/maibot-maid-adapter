@@ -60,21 +60,13 @@ request_timeout_ms = 30000
 reconnect_initial_delay_ms = 1000
 reconnect_max_delay_ms = 30000
 max_pending_maid_agent_turns = 256
-reply_generation_model = "replyer"
-reply_generation_temperature = 0.4
-reply_generation_max_tokens = 256
-enable_agent_actions = true
-enable_agent_emoji_bubbles = true
-action_planning_model = ""
-action_planning_temperature = 0.1
-action_planning_max_tokens = 256
 ```
 
 需要接入 Minecraft 里的 MaidBridge mod 时，确认 `[plugin].enabled = true`，并确认 `server_uri`、`access_token` 和 Java 侧 MaidBridge 配置一致。关闭后插件仍会注册 API，但不会启动 WebSocket 运行时。
 
 `maid_uuid` 填要接管的女仆 UUID。`server_id` 是连接 ID，单个 MaiBot 实例保持默认即可。外部接管时的显示名优先使用 MaiBot 全局配置 `bot.nickname`，没有设置昵称时使用 `agent_id`。
 
-MaiBot 原生 `send_emoji` 会在外部接管回合内直桥为 Minecraft 女仆图片气泡，不再进入 MaiBot 普通发送服务。静态图片统一转为 PNG，GIF 动图会原样桥接，其他动图会转为 GIF 后桥接给客户端动态纹理。Java 端仍会校验外部表情包开关、PNG/GIF 格式与声明尺寸，最终载荷大小由 `max_message_bytes` 控制。`enable_agent_emoji_bubbles` 控制的是 TLM 本地随机表情或颜文字气泡，不影响 `send_emoji` 外部图片桥接。
+MaiBot 原生 `send_emoji` 会在外部接管回合内直桥为 Minecraft 女仆图片气泡，不再进入 MaiBot 普通发送服务。静态图片统一转为 PNG，GIF 动图会原样桥接，其他动图会转为 GIF 后桥接给客户端动态纹理。Java 端仍会校验外部表情包开关、PNG/GIF 格式与声明尺寸，最终载荷大小由 `max_message_bytes` 控制。
 
 ## 公开 API
 

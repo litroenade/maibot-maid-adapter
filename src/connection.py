@@ -115,15 +115,15 @@ class MaidBridgeConnection:
             await self._teardown_runtime(reason="runtime_stopped", publish=False)
 
     async def _connect_once(self, settings: Any, *, generation: int, metadata: dict[str, Any]) -> None:
-        self.ctx.logger.info(
-            f"MaidBridge 正在连接 [url={settings.websocket_url}, "
-            f"maid_turns={settings.enable_maid_agent_turns}]"
-        )
         bot_name = await self._resolve_bot_name(settings)
         self._bot_name = bot_name
         maid_uuid = first_non_blank(settings.maid_uuid)
         if not maid_uuid:
-            raise RuntimeError("MaidAdapter 必须填写女仆 UUID")
+            raise RuntimeError("女仆接管必须填写女仆 UUID")
+        self.ctx.logger.info(
+            f"MaidBridge 正在连接 [url={settings.websocket_url}, maid_uuid={maid_uuid}, "
+            f"agent_id={settings.agent_id}, agent_name={bot_name}, maid_turns={settings.enable_maid_agent_turns}]"
+        )
 
         transport = AioHttpWebSocketBridgeTransport(
             settings.websocket_url,
@@ -159,7 +159,8 @@ class MaidBridgeConnection:
         self._state.mark_connected(server_id=settings.server_id, connection_id=connection_id)
         self._reconnect_attempts = 0
         self.ctx.logger.info(
-            f"MaidBridge 运行时已就绪 [url={settings.websocket_url}, connection_id={connection_id}]"
+            f"MaidBridge 运行时已就绪 [url={settings.websocket_url}, connection_id={connection_id}, "
+            f"maid_uuid={maid_uuid}, agent_id={settings.agent_id}, agent_name={bot_name}]"
         )
         await self._publish_adapter_state(
             runtime_connected=True,
@@ -267,10 +268,12 @@ class MaidBridgeConnection:
         if self._transport is None:
             return
         bot_name = first_non_blank(self._bot_name, settings.agent_id, DEFAULT_AGENT_ID)
+        maid_uuid = first_non_blank(settings.maid_uuid)
         frame = build_session_initialize_frame(
             client_id=f"{settings.server_id}@{settings.websocket_url}",
             agent_id=settings.agent_id,
             agent_name=bot_name,
+            maid_uuid=maid_uuid,
             roles=settings.client_roles,
             subscriptions=settings.subscriptions,
             deadline_ms=settings.request_timeout_ms,
@@ -281,13 +284,14 @@ class MaidBridgeConnection:
         if reply_type != "bridge.session.ready":
             error = str(payload.get("error") or "MaidBridge 会话初始化被拒绝")
             self.ctx.logger.warning(
-                f"MaidBridge 会话初始化被拒绝 [request_id={frame.request_id}, "
-                f"trace_id={frame.trace_id}, error={error}]"
+                f"MaidBridge 会话初始化被拒绝 [request_id={frame.request_id}, trace_id={frame.trace_id}, "
+                f"maid_uuid={maid_uuid}, agent_id={settings.agent_id}, agent_name={bot_name}, "
+                f"roles={list(settings.client_roles)}, subscriptions={list(settings.subscriptions)}, error={error}]"
             )
             raise RuntimeError(f"MaidBridge 会话初始化被拒绝：{error}")
         self.ctx.logger.info(
             f"MaidBridge 握手完成 [request_id={frame.request_id}, reply_type={reply_type}, "
-            f"agent_id={settings.agent_id}, agent_name={bot_name}, "
+            f"maid_uuid={maid_uuid}, agent_id={settings.agent_id}, agent_name={bot_name}, "
             f"roles={len(settings.client_roles)}, subscriptions={len(settings.subscriptions)}]"
         )
 

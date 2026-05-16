@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+from ..constants import MAIBOT_REPLYER_TASK
 from ..prompt_loader import render_prompt
 from ..utils import first_non_blank
 
@@ -15,12 +16,8 @@ async def plan_external_actions(
     arguments: Mapping[str, Any],
     tool_call_id: str,
 ) -> dict[str, Any]:
-    if not settings.enable_agent_actions:
-        return {"success": True, "actions": [], "reason": "maid_turn_actions_disabled"}
-    action_defs = _available_actions(
-        turn_context,
-        include_emoji_bubbles=settings.enable_agent_emoji_bubbles,
-    )
+    _ = settings
+    action_defs = _available_actions(turn_context)
     if not action_defs:
         return {"success": True, "actions": [], "reason": "no_java_actions"}
 
@@ -32,9 +29,7 @@ async def plan_external_actions(
                 arguments=arguments,
                 tool_call_id=tool_call_id,
             ),
-            model=settings.action_planning_model,
-            temperature=float(settings.action_planning_temperature),
-            max_tokens=int(settings.action_planning_max_tokens),
+            model=MAIBOT_REPLYER_TASK,
         )
     except Exception as exc:
         return {"success": False, "actions": [], "error": str(exc)}
@@ -84,8 +79,6 @@ def _action_prompt(
 
 def _available_actions(
     turn_context: Mapping[str, Any],
-    *,
-    include_emoji_bubbles: bool = True,
 ) -> dict[str, Mapping[str, Any]]:
     actions = turn_context.get("actions")
     if not isinstance(actions, Mapping):
@@ -98,8 +91,6 @@ def _available_actions(
         if not isinstance(item, Mapping):
             continue
         action_id = _canonical_action_type(first_non_blank(item.get("id"), item.get("name")))
-        if action_id == "show_emoji_bubble" and not include_emoji_bubbles:
-            continue
         if action_id:
             result[action_id] = item
     return result

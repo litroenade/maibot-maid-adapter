@@ -86,14 +86,17 @@ class RuntimeRouter:
             return
         if decision.kind == "maid_turn":
             handler = self._maid_turn_handler
+            maid_uuid = _decision_maid_uuid(decision)
             if handler is None:
                 self._ctx.logger.warning(
-                    f"MaidBridge 女仆回合已拒绝：处理器未启用 [event_id={frame.id}, trace_id={frame.trace_id}]"
+                    f"MaidBridge 女仆回合已拒绝：处理器未启用 [event_id={frame.id}, trace_id={frame.trace_id}, "
+                    f"maid_uuid={maid_uuid}]"
                 )
                 return
             self._ctx.logger.info(
                 f"MaidBridge 收到女仆回合请求 [event_id={frame.id}, trace_id={frame.trace_id}, "
-                f"turn_id={decision.payload['turn_id']}, request_id={decision.payload['request_id']}]"
+                f"maid_uuid={maid_uuid}, turn_id={decision.payload['turn_id']}, "
+                f"request_id={decision.payload['request_id']}]"
             )
             task = asyncio.create_task(self._dispatch_maid_turn(frame, handler))
             self._tasks.add(task)
@@ -110,20 +113,25 @@ class RuntimeRouter:
         )
 
     async def _dispatch_maid_turn(self, frame: BridgeFrame, handler: Any) -> None:
+        maid_uuid = _frame_maid_uuid(frame)
+        turn_id = _frame_turn_id(frame)
         try:
             reply = await handler.handle(frame)
             self._ctx.logger.info(
-                f"MaidBridge 女仆回合已完成 [event_id={frame.id}, trace_id={frame.trace_id}]"
+                f"MaidBridge 女仆回合已完成 [event_id={frame.id}, trace_id={frame.trace_id}, "
+                f"maid_uuid={maid_uuid}, turn_id={turn_id}]"
             )
             self._ctx.logger.debug(f"MaidBridge 女仆回合本地结果：{_mapping_summary(reply)}")
         except asyncio.CancelledError:
             self._ctx.logger.warning(
-                f"MaidBridge 女仆回合已取消 [event_id={frame.id}, trace_id={frame.trace_id}]"
+                f"MaidBridge 女仆回合已取消 [event_id={frame.id}, trace_id={frame.trace_id}, "
+                f"maid_uuid={maid_uuid}, turn_id={turn_id}]"
             )
             raise
         except Exception as exc:
             self._ctx.logger.warning(
-                f"MaidBridge 女仆回合处理失败 [event_id={frame.id}, trace_id={frame.trace_id}, error={exc}]"
+                f"MaidBridge 女仆回合处理失败 [event_id={frame.id}, trace_id={frame.trace_id}, "
+                f"maid_uuid={maid_uuid}, turn_id={turn_id}, error={exc}]"
             )
 
     def _complete_pending_response(self, frame: BridgeFrame, routed_payload: Mapping[str, Any]) -> None:
@@ -188,6 +196,20 @@ def _response_error(value: Mapping[str, Any]) -> str:
     if isinstance(payload, Mapping):
         return str(payload.get("error") or "")
     return ""
+
+
+def _decision_maid_uuid(decision: RouteDecision) -> str:
+    maid = decision.payload.get("maid")
+    return str(maid.get("uuid") if isinstance(maid, Mapping) else "").strip()
+
+
+def _frame_maid_uuid(frame: BridgeFrame) -> str:
+    maid = frame.payload.get("maid")
+    return str(maid.get("uuid") if isinstance(maid, Mapping) else "").strip()
+
+
+def _frame_turn_id(frame: BridgeFrame) -> str:
+    return str(frame.payload.get("turn_id") or frame.request_id or frame.id or "").strip()
 
 
 def _mapping_summary(value: Any) -> dict[str, Any]:

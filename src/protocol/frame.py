@@ -289,6 +289,7 @@ def build_session_initialize_frame(
     client_id: str,
     agent_id: str = "",
     agent_name: str = "",
+    maid_uuid: str = "",
     roles: Iterable[str],
     subscriptions: Iterable[str],
     deadline_ms: int = DEFAULT_DEADLINE_MS,
@@ -312,6 +313,9 @@ def build_session_initialize_frame(
             for key, value in {"id": normalized_agent_id, "name": normalized_agent_name}.items()
             if value
         }
+    normalized_maid_uuid = _first_non_blank(maid_uuid)
+    if normalized_maid_uuid:
+        payload["maid"] = {"uuid": normalized_maid_uuid}
     frame = BridgeFrame(
         protocol=PROTOCOL,
         type="bridge.session.initialize",

@@ -19,11 +19,6 @@ MAX_MESSAGE_BYTES_LIMIT = 64 * 1024 * 1024
 DEFAULT_MAX_PENDING_MAID_AGENT_TURNS = 256
 DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1000
 DEFAULT_RECONNECT_MAX_DELAY_MS = 30000
-DEFAULT_REPLY_GENERATION_MODEL = "replyer"
-DEFAULT_REPLY_GENERATION_TEMPERATURE = 0.4
-DEFAULT_REPLY_GENERATION_MAX_TOKENS = 256
-DEFAULT_ACTION_PLANNING_TEMPERATURE = 0.1
-DEFAULT_ACTION_PLANNING_MAX_TOKENS = 256
 
 
 class MaidAdapterPluginOptions(PluginConfigBase):
@@ -48,7 +43,7 @@ class MaidAdapterPluginOptions(PluginConfigBase):
 
 
 class MaidAdapterConnectionConfig(PluginConfigBase):
-    __ui_label__: ClassVar[str] = "MaidAdapter"
+    __ui_label__: ClassVar[str] = "女仆接管"
     __ui_icon__: ClassVar[str] = "bot"
     __ui_order__: ClassVar[int] = 1
 
@@ -93,7 +88,7 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         default=DEFAULT_JAVA_SERVER_URI,
         description="Minecraft 侧 MaidBridge 的连接地址。",
         json_schema_extra={
-            "label": "Java MaidBridge 地址",
+            "label": "MaidBridge 地址",
             "order": 6,
             "placeholder": DEFAULT_JAVA_SERVER_URI,
         },
@@ -153,62 +148,6 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
             "hint": "防止异常堆积，一般保持默认。",
             "order": 13,
         },
-    )
-    reply_generation_model: str = Field(
-        default=DEFAULT_REPLY_GENERATION_MODEL,
-        description="外部接管回复生成使用的 MaiBot LLM 任务名；留空时使用宿主默认任务。",
-        json_schema_extra={"label": "回复生成模型", "order": 14, "placeholder": DEFAULT_REPLY_GENERATION_MODEL},
-    )
-    reply_generation_temperature: float = Field(
-        default=DEFAULT_REPLY_GENERATION_TEMPERATURE,
-        ge=0,
-        le=2,
-        description="外部接管回复生成温度。",
-        json_schema_extra={"label": "回复生成温度", "order": 15},
-    )
-    reply_generation_max_tokens: int = Field(
-        default=DEFAULT_REPLY_GENERATION_MAX_TOKENS,
-        ge=32,
-        le=2048,
-        description="外部接管回复生成最大 token 数。",
-        json_schema_extra={"label": "回复生成最大 token", "order": 16},
-    )
-    enable_agent_actions: bool = Field(
-        default=True,
-        description="是否允许外部接管回合把动作决策写回 Java actions。",
-        json_schema_extra={
-            "label": "启用女仆动作回写",
-            "hint": "动作只在当前 pending 女仆回合内生效，不走 MaiBot 普通发送服务。",
-            "order": 17,
-        },
-    )
-    enable_agent_emoji_bubbles: bool = Field(
-        default=True,
-        description="是否允许动作规划器请求 Java 侧 TLM 原生表情或颜文字气泡。",
-        json_schema_extra={
-            "label": "启用 TLM 表情气泡规划",
-            "hint": "MaiBot 原生 send_emoji 会由插件直桥为外部图片气泡，并受 Java capability 控制。",
-            "order": 18,
-        },
-    )
-    action_planning_model: str = Field(
-        default="",
-        description="外部接管动作规划使用的 MaiBot LLM 任务名；留空时复用回复生成模型。",
-        json_schema_extra={"label": "动作规划模型", "order": 19, "placeholder": "留空复用回复生成模型"},
-    )
-    action_planning_temperature: float = Field(
-        default=DEFAULT_ACTION_PLANNING_TEMPERATURE,
-        ge=0,
-        le=2,
-        description="外部接管动作规划温度。",
-        json_schema_extra={"label": "动作规划温度", "order": 20},
-    )
-    action_planning_max_tokens: int = Field(
-        default=DEFAULT_ACTION_PLANNING_MAX_TOKENS,
-        ge=32,
-        le=2048,
-        description="外部接管动作规划最大 token 数。",
-        json_schema_extra={"label": "动作规划最大 token", "order": 21},
     )
 
 
@@ -279,35 +218,3 @@ class MaiBotMaidAdapterSettings(PluginConfigBase):
     @property
     def maid_uuid(self) -> str:
         return self.maid_adapter.maid_uuid.strip()
-
-    @property
-    def reply_generation_model(self) -> str:
-        return self.maid_adapter.reply_generation_model.strip()
-
-    @property
-    def reply_generation_temperature(self) -> float:
-        return self.maid_adapter.reply_generation_temperature
-
-    @property
-    def reply_generation_max_tokens(self) -> int:
-        return self.maid_adapter.reply_generation_max_tokens
-
-    @property
-    def enable_agent_actions(self) -> bool:
-        return self.maid_adapter.enable_agent_actions
-
-    @property
-    def enable_agent_emoji_bubbles(self) -> bool:
-        return self.maid_adapter.enable_agent_emoji_bubbles
-
-    @property
-    def action_planning_model(self) -> str:
-        return self.maid_adapter.action_planning_model.strip() or self.reply_generation_model
-
-    @property
-    def action_planning_temperature(self) -> float:
-        return self.maid_adapter.action_planning_temperature
-
-    @property
-    def action_planning_max_tokens(self) -> int:
-        return self.maid_adapter.action_planning_max_tokens
