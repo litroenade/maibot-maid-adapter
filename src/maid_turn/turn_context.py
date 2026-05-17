@@ -16,6 +16,7 @@ class TurnContext:
     turn_id: str
     maid_uuid: str
     bot_name: str
+    channel_name: str
     speaker_uuid: str
     speaker_name: str
     text: str
@@ -43,7 +44,8 @@ def parse_turn_context(frame: BridgeFrame, settings: Any, *, bot_name: str = "")
     if not text:
         raise BridgeProtocolError("maid.agent.turn.request message 文本不能为空")
     speaker = _mapping(payload.get("speaker"))
-    scope = f"maid:{maid_uuid}"
+    channel_name = first_non_blank(getattr(settings, "server_id", ""))
+    scope = _maid_scope(channel_name=channel_name, maid_uuid=maid_uuid)
     resolved_bot_name = first_non_blank(
         bot_name,
         settings.agent_id,
@@ -54,6 +56,7 @@ def parse_turn_context(frame: BridgeFrame, settings: Any, *, bot_name: str = "")
         turn_id=turn_id,
         maid_uuid=maid_uuid,
         bot_name=resolved_bot_name,
+        channel_name=first_non_blank(channel_name, scope),
         speaker_uuid=speaker_uuid,
         speaker_name=first_non_blank(speaker.get("name"), speaker.get("nickname"), speaker_uuid),
         text=text,
@@ -82,7 +85,7 @@ def build_maibot_message(context: TurnContext) -> dict[str, Any]:
         "is_mentioned": 1.0,
         "bot_name": context.bot_name,
         "minecraft_channel_id": context.scope,
-        "minecraft_channel_name": context.bot_name,
+        "minecraft_channel_name": context.channel_name,
         "speaker_uuid": context.speaker_uuid,
         "speaker_name": context.speaker_name,
         "maid_state": dict(context.state),
@@ -100,7 +103,7 @@ def build_maibot_message(context: TurnContext) -> dict[str, Any]:
             },
             "group_info": {
                 "group_id": context.scope,
-                "group_name": context.bot_name,
+                "group_name": context.channel_name,
             },
             "additional_config": additional_config,
         },
@@ -119,7 +122,7 @@ def build_route_metadata(context: TurnContext) -> dict[str, Any]:
         "maidbridge_turn_id": context.turn_id,
         "maid_uuid": context.maid_uuid,
         "minecraft_channel_id": context.scope,
-        "minecraft_channel_name": context.bot_name,
+        "minecraft_channel_name": context.channel_name,
         "bot_name": context.bot_name,
         "speaker_uuid": context.speaker_uuid,
         "speaker_name": context.speaker_name,
@@ -263,6 +266,12 @@ def _compact_choices(choices: list[Any], *, limit: int = 80) -> list[dict[str, A
         if item:
             result.append(item)
     return result
+
+
+def _maid_scope(*, channel_name: str, maid_uuid: str) -> str:
+    if not channel_name:
+        return f"maid:{maid_uuid}"
+    return f"{channel_name}:maid:{maid_uuid}"
 
 
 def _maisaka_session_id(*, platform: str, group_id: str, account_id: str, scope: str) -> str:

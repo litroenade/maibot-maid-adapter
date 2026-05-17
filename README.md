@@ -64,7 +64,7 @@ max_pending_maid_agent_turns = 256
 
 需要接入 Minecraft 里的 MaidBridge mod 时，确认 `[plugin].enabled = true`，并确认 `server_uri`、`access_token` 和 Java 侧 MaidBridge 配置一致。关闭后插件仍会注册 API，但不会启动 WebSocket 运行时。
 
-`maid_uuid` 填要接管的女仆 UUID。`server_id` 是连接 ID，单个 MaiBot 实例保持默认即可。外部接管时的显示名优先使用 MaiBot 全局配置 `bot.nickname`，没有设置昵称时使用 `agent_id`。
+`maid_uuid` 填要接管的女仆 UUID。`server_id` 是 MaiBot 侧的 Minecraft 聊天会话标识符，会作为群聊名称并参与会话区分；同一 `server_id` 和同一女仆 UUID 会复用同一个 MaiBot 会话。外部接管时的 bot 显示名优先使用 MaiBot 全局配置 `bot.nickname`，没有设置昵称时使用 `agent_id`。
 
 MaiBot 原生 `send_emoji` 会在外部接管回合内直桥为 Minecraft 女仆图片气泡，不再进入 MaiBot 普通发送服务。静态图片统一转为 PNG，GIF 动图会原样桥接，其他动图会转为 GIF 后桥接给客户端动态纹理。Java 端仍会校验外部表情包开关、PNG/GIF 格式与声明尺寸，最终载荷大小由 `max_message_bytes` 控制。
 

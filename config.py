@@ -4,7 +4,7 @@ from maibot_sdk import Field, PluginConfigBase
 
 SUPPORTED_CONFIG_VERSION = "0.3.10"
 DEFAULT_SERVER_ID = "minecraft-local"
-DEFAULT_AGENT_ID = "maibot"
+DEFAULT_AGENT_ID = "麦麦"
 DEFAULT_JAVA_SERVER_URI = "ws://127.0.0.1:8765/maidbridge"
 DEFAULT_CLIENT_ROLES = ["maid_api_query", "maid_api_call", "debug"]
 DEFAULT_SUBSCRIPTIONS = [
@@ -59,17 +59,17 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         description="要接管的女仆 UUID，同时作为 minecraft 平台路由账号。",
         json_schema_extra={
             "label": "女仆 UUID",
-            "hint": "插件会用该 UUID 注册 minecraft 路由状态，不再动态改写 MaiBot 全局平台配置。",
+            "hint": "插件会用该 UUID 注册 minecraft 路由状态。",
             "order": 1,
             "placeholder": "填写女仆 UUID",
         },
     )
     server_id: str = Field(
         default=DEFAULT_SERVER_ID,
-        description="当前连接的内部 ID。",
+        description="MaiBot 侧用于区分 Minecraft 聊天会话的标识符。",
         json_schema_extra={
-            "label": "连接 ID",
-            "hint": "单个 MaiBot 实例保持默认即可。",
+            "label": "聊天会话标识符",
+            "hint": "本地群聊名称前缀标识符，实际为server_id+maid_uuid",
             "order": 3,
             "placeholder": DEFAULT_SERVER_ID,
         },
@@ -79,7 +79,7 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         description="外部接管方的稳定协议标识符。",
         json_schema_extra={
             "label": "外部接管标识符",
-            "hint": "Minecraft 显示名称优先使用 MaiBot bot.nickname；未配置昵称时才回退到这里。",
+            "hint": "作为mc侧bot标识符以及显示名称，可能与实体名称有不同",
             "order": 4,
             "placeholder": DEFAULT_AGENT_ID,
         },
