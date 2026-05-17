@@ -6,6 +6,7 @@ from maibot_sdk import HookHandler
 from maibot_sdk.types import HookMode, HookOrder
 
 from ..constants import MAIBOT_REPLYER_TASK, SERVER_CHAT_RESPONSE_TYPE
+from ..prompt_loader import render_prompt
 from ..protocol.frame import build_server_chat_message_frame
 from ..utils import first_non_blank
 from .service import ServerChatContext, ServerChatService
@@ -215,11 +216,7 @@ def _reply_prompt(
     return [
         {
             "role": "system",
-            "content": (
-                "你负责把 MaiSaka planner 的回复意图改写成一条 Minecraft 服务器群聊里的普通成员发言。"
-                "只输出最终可见文本，不要输出分析、JSON、Markdown、引号、字段名或说话人前缀。"
-                "优先使用玩家消息的语言；玩家使用中文时输出简体中文。"
-            ),
+            "content": render_prompt("server_chat_reply"),
         },
         {
             "role": "user",

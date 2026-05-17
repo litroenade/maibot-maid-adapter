@@ -16,6 +16,8 @@
 5. 参数缺失、目标不唯一、Java 未暴露对应 action，输出空动作。
 6. `switch_work_task` 只有在玩家明确指定攻击某个具体实体时才填写 `entity_id`；该值必须来自 `turn_context.action_context.nearby_living_entities[].entity_id`。
 7. 只要求切换攻击模式或工作任务时，可以只输出 `task_id`，不要因为缺少 `entity_id` 丢弃动作。
+8. 不要猜测实体 ID、任务 ID、日程值或布尔参数；上下文没有明确值时输出空动作。
+9. 只输出 `actions` 字段；不要输出 reason、message、reply、analysis 或其他字段。
 
 请只输出 JSON object，不要解释、Markdown 或其他文本。格式如下：
 {{

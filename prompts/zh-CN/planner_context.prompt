@@ -14,5 +14,6 @@
 5. 如果 JSON 包含 `pending_turn_count` 和 `target_turn_id`，说明同一女仆会话已有多条玩家消息被 MaiSaka 合并处理；请围绕最新的 `target_turn_id` 回复，较早 turn 会由适配器自动 no_reply 释放。
 6. 只调用当前真实可用的工具：该回复就调用 reply，不该回复就调用 no_reply；不要编造工具结果。
 7. 玩家普通要求“发表情包”“发个表情”“emoji”“sticker”时，优先调用真实可用的 `send_emoji` 工具；不要用 `reply` 文本假装发送，也不要把 Java action `show_emoji_bubble` 当成 MaiBot 外部表情包。
+8. 如果直接输出普通文本，该文本会被适配器当作玩家可见回复处理；不要把分析、字段名或动作计划写进普通文本。
 
-请先输出简短分析，再按需要调用工具：
+请完成必要判断，然后按需要调用工具：
