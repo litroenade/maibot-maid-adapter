@@ -11,6 +11,8 @@ from ..utils import first_non_blank
 from .service import ServerChatContext, ServerChatService
 
 SERVER_CHAT_REPLY_HOOK_TIMEOUT_MS = 45_000
+SERVER_CHAT_UNSUPPORTED_SEND_TOOLS = {"send_emoji", "send_image"}
+SERVER_CHAT_NO_OUTPUT_TERMINAL_TOOLS = {"finish", "no_action", "wait"}
 
 
 class ServerChatPlannerHooks:
@@ -51,18 +53,18 @@ class ServerChatPlannerHooks:
         if context is None:
             return hook_continue()
 
+        should_complete_session = False
         try:
             normalized_tool_calls = list(tool_calls or []) if isinstance(tool_calls, list) else []
             reply_calls = _tool_calls_named(normalized_tool_calls, "reply")
-            emoji_calls = _tool_calls_named(normalized_tool_calls, "send_emoji")
-            if emoji_calls:
-                self.ctx.logger.warning(
-                    f"MaidBridge 服务器群聊暂不接管 MaiBot 表情发送，已阻止原生 send_service "
-                    f"[session_id={session_id}, count={len(emoji_calls)}]"
-                )
-                return hook_continue(response="", tool_calls=[])
+            unsupported_send_calls = _tool_calls_matching(normalized_tool_calls, SERVER_CHAT_UNSUPPORTED_SEND_TOOLS)
 
             if reply_calls:
+                if unsupported_send_calls:
+                    self.ctx.logger.warning(
+                        f"MaidBridge 服务器群聊只支持文字，已跳过同轮媒体工具 "
+                        f"[session_id={session_id}, tools={_tool_call_names(unsupported_send_calls)}]"
+                    )
                 reply_result = await _generate_server_chat_reply(
                     self,
                     context,
@@ -74,6 +76,7 @@ class ServerChatPlannerHooks:
                         f"MaidBridge 服务器群聊回复生成失败，已阻止原生 send_service "
                         f"[session_id={session_id}, error={reply_result.get('error', '')}]"
                     )
+                    should_complete_session = True
                     return hook_continue(response="", tool_calls=[])
 
                 send_result = await _send_server_chat_text(
@@ -93,7 +96,23 @@ class ServerChatPlannerHooks:
                         f"MaidBridge 服务器群聊 reply 工具回写失败 "
                         f"[session_id={session_id}, error={send_result.get('error', '')}]"
                     )
+                should_complete_session = True
                 return hook_continue(response="", tool_calls=[])
+
+            if unsupported_send_calls:
+                self.ctx.logger.warning(
+                    f"MaidBridge 服务器群聊只支持文字，已阻止媒体工具走原生 send_service "
+                    f"[session_id={session_id}, tools={_tool_call_names(unsupported_send_calls)}]"
+                )
+                should_complete_session = True
+                return hook_continue(response="", tool_calls=[])
+
+            if _tool_calls_matching(normalized_tool_calls, SERVER_CHAT_NO_OUTPUT_TERMINAL_TOOLS):
+                should_complete_session = True
+                return hook_continue()
+
+            if normalized_tool_calls:
+                return hook_continue()
 
             plain_response = _clean_reply_text(first_non_blank(response))
             if plain_response:
@@ -114,17 +133,21 @@ class ServerChatPlannerHooks:
                         f"MaidBridge 服务器群聊 planner 普通文本回写失败 "
                         f"[session_id={session_id}, error={send_result.get('error', '')}]"
                     )
+                should_complete_session = True
                 return hook_continue(response="", tool_calls=[])
 
+            should_complete_session = True
             return hook_continue()
         except Exception as exc:
             self.ctx.logger.warning(
                 f"MaidBridge 服务器群聊 after_response 处理异常，已阻止原生 send_service "
                 f"[session_id={session_id}, error={exc}]"
             )
+            should_complete_session = True
             return hook_continue(response="", tool_calls=[])
         finally:
-            service.complete_session(session_id)
+            if should_complete_session:
+                service.complete_session(session_id)
 
 
 async def _generate_server_chat_reply(
@@ -266,6 +289,18 @@ def _tool_calls_named(tool_calls: list[dict[str, Any]], expected_name: str) -> l
         for tool_call in tool_calls
         if isinstance(tool_call, Mapping) and _tool_call_name(tool_call) == expected
     ]
+
+
+def _tool_calls_matching(tool_calls: list[dict[str, Any]], expected_names: set[str]) -> list[Mapping[str, Any]]:
+    return [
+        tool_call
+        for tool_call in tool_calls
+        if isinstance(tool_call, Mapping) and _tool_call_name(tool_call) in expected_names
+    ]
+
+
+def _tool_call_names(tool_calls: list[Mapping[str, Any]]) -> list[str]:
+    return [name for tool_call in tool_calls if (name := _tool_call_name(tool_call))]
 
 
 def _tool_call_id(tool_call: Any) -> str:
