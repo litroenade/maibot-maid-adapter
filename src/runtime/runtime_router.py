@@ -17,12 +17,14 @@ class RuntimeRouter:
         state: BridgeRuntimeState,
         max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES,
         maid_turn_handler: Any | None = None,
+        server_chat_handler: Any | None = None,
     ) -> None:
         self._ctx = ctx
         self._transport = transport
         self._state = state
         self._max_message_bytes = max_message_bytes
         self._maid_turn_handler = maid_turn_handler
+        self._server_chat_handler = server_chat_handler
         self._started = False
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -71,7 +73,7 @@ class RuntimeRouter:
                 f"endpoint={decision.payload['endpoint_id']}, trace_id={frame.trace_id}]"
             )
             return
-        if decision.kind in {"api_response", "bridge_error"}:
+        if decision.kind in {"api_response", "server_chat_response", "bridge_error"}:
             self._complete_pending_response(frame, decision.payload)
             if decision.kind == "bridge_error":
                 self._ctx.logger.warning(
@@ -83,6 +85,23 @@ class RuntimeRouter:
                     f"MaidBridge 领域响应完成 [type={frame.type}, reply_to={frame.reply_to}, "
                     f"payload={_mapping_summary(decision.payload)}]"
                 )
+            return
+        if decision.kind == "server_chat":
+            handler = self._server_chat_handler
+            room = frame.payload.get("room")
+            room_id = str(room.get("id") if isinstance(room, Mapping) else "").strip()
+            if handler is None:
+                self._ctx.logger.warning(
+                    f"MaidBridge 服务器群聊消息已拒绝：处理器未启用 [event_id={frame.id}, "
+                    f"trace_id={frame.trace_id}, room_id={room_id}]"
+                )
+                return
+            self._ctx.logger.info(
+                f"MaidBridge 收到服务器群聊消息 [event_id={frame.id}, trace_id={frame.trace_id}, room_id={room_id}]"
+            )
+            task = asyncio.create_task(self._dispatch_server_chat(frame, handler))
+            self._tasks.add(task)
+            task.add_done_callback(self._forget_task)
             return
         if decision.kind == "maid_turn":
             handler = self._maid_turn_handler
@@ -132,6 +151,23 @@ class RuntimeRouter:
             self._ctx.logger.warning(
                 f"MaidBridge 女仆回合处理失败 [event_id={frame.id}, trace_id={frame.trace_id}, "
                 f"maid_uuid={maid_uuid}, turn_id={turn_id}, error={exc}]"
+            )
+
+    async def _dispatch_server_chat(self, frame: BridgeFrame, handler: Any) -> None:
+        try:
+            accepted = await handler.handle(frame)
+            self._ctx.logger.info(
+                f"MaidBridge 服务器群聊消息已注入 MaiBot [event_id={frame.id}, trace_id={frame.trace_id}, "
+                f"accepted={accepted}]"
+            )
+        except asyncio.CancelledError:
+            self._ctx.logger.warning(
+                f"MaidBridge 服务器群聊消息处理已取消 [event_id={frame.id}, trace_id={frame.trace_id}]"
+            )
+            raise
+        except Exception as exc:
+            self._ctx.logger.warning(
+                f"MaidBridge 服务器群聊消息处理失败 [event_id={frame.id}, trace_id={frame.trace_id}, error={exc}]"
             )
 
     def _complete_pending_response(self, frame: BridgeFrame, routed_payload: Mapping[str, Any]) -> None:

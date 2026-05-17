@@ -10,6 +10,7 @@ from ..constants import (
     DEFAULT_MAX_MESSAGE_BYTES,
     JAVA_TO_CLIENT,
     PROTOCOL,
+    SERVER_CHAT_MESSAGE_TYPE,
 )
 
 
@@ -153,6 +154,24 @@ def _validate_turn_complete_payload(payload: Mapping[str, Any]) -> None:
     raise BridgeProtocolError(f"不支持的 maid.agent.turn.complete outcome：{outcome}")
 
 
+def _validate_server_chat_payload(payload: Mapping[str, Any]) -> None:
+    message = payload.get("message")
+    if not isinstance(message, Mapping):
+        raise BridgeProtocolError("payload.message 必须是对象")
+    kind = _first_non_blank(message.get("kind"))
+    if kind not in {"member", "system"}:
+        raise BridgeProtocolError("payload.message.kind 只支持 member 或 system")
+    if not _first_non_blank(message.get("text")):
+        raise BridgeProtocolError("payload.message.text 不能为空")
+    room = payload.get("room")
+    if not isinstance(room, Mapping) or not _first_non_blank(room.get("id")) or not _first_non_blank(room.get("name")):
+        raise BridgeProtocolError("payload.room.id 和 payload.room.name 不能为空")
+    if kind == "member":
+        speaker = payload.get("speaker")
+        if not isinstance(speaker, Mapping) or not _first_non_blank(speaker.get("name")):
+            raise BridgeProtocolError("payload.speaker.name 不能为空")
+
+
 @dataclass(frozen=True)
 class BridgeFrame:
     """Java、传输层和 Python 处理器共享的线级帧。"""
@@ -235,6 +254,8 @@ class BridgeFrame:
     def validate(self) -> None:
         if self.type == "maid.agent.turn.complete":
             _validate_turn_complete_payload(self.payload)
+        if self.type == SERVER_CHAT_MESSAGE_TYPE:
+            _validate_server_chat_payload(self.payload)
         if _requires_maid_uuid(self.type):
             _require_payload_maid_uuid(self.payload)
 
@@ -388,6 +409,60 @@ def build_maid_agent_turn_complete_frame(
         request_id=normalized_turn_id,
         reply_to=_first_non_blank(reply_to),
         trace_id=_first_non_blank(trace_id, normalized_turn_id),
+        deadline_ms=deadline_ms,
+        direction=CLIENT_TO_JAVA,
+        source_endpoint=source_endpoint,
+        target_endpoint=target_endpoint,
+        payload=payload,
+    )
+    BridgeFrame.from_dict(frame.to_dict())
+    return frame
+
+
+def build_server_chat_message_frame(
+    *,
+    room_id: str,
+    room_name: str,
+    text: str,
+    kind: str = "member",
+    speaker_id: str = "",
+    speaker_name: str = "",
+    metadata: Mapping[str, Any] | None = None,
+    deadline_ms: int = DEFAULT_DEADLINE_MS,
+    trace_id: str = "",
+    source_endpoint: str = DEFAULT_CLIENT_ENDPOINT_ID,
+    target_endpoint: str = DEFAULT_JAVA_ENDPOINT_ID,
+) -> BridgeFrame:
+    normalized_kind = _first_non_blank(kind)
+    if normalized_kind not in {"member", "system"}:
+        raise BridgeProtocolError("服务器群聊消息 kind 只支持 member 或 system")
+    payload: dict[str, Any] = {
+        "message": {
+            "kind": normalized_kind,
+            "text": _first_non_blank(text),
+        },
+        "room": {
+            "id": _first_non_blank(room_id),
+            "name": _first_non_blank(room_name),
+        },
+        "metadata": dict(metadata or {}),
+    }
+    if normalized_kind == "member":
+        payload["speaker"] = {
+            "id": _first_non_blank(speaker_id),
+            "name": _first_non_blank(speaker_name),
+        }
+    frame_id = _first_non_blank(str(payload["metadata"].get("message_id") or ""))
+    if not frame_id:
+        from uuid import uuid4
+
+        frame_id = f"server-chat-{uuid4()}"
+    frame = BridgeFrame(
+        protocol=PROTOCOL,
+        type=SERVER_CHAT_MESSAGE_TYPE,
+        id=frame_id,
+        request_id=frame_id,
+        trace_id=_first_non_blank(trace_id, f"trace-{frame_id}"),
         deadline_ms=deadline_ms,
         direction=CLIENT_TO_JAVA,
         source_endpoint=source_endpoint,

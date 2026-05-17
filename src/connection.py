@@ -3,11 +3,12 @@ import contextlib
 from typing import TYPE_CHECKING, Any
 
 from ..config import DEFAULT_AGENT_ID
-from .constants import ADAPTER_STATE_NAME, PLATFORM, PROTOCOL, WEBSOCKET_ROLE
+from .constants import ADAPTER_STATE_NAME, PLATFORM, PROTOCOL, SERVER_CHAT_GATEWAY_NAME, WEBSOCKET_ROLE
 from .maid_turn.turn_service import MaidTurnService
 from .protocol.frame import build_session_initialize_frame
 from .runtime.runtime_router import RuntimeRouter
 from .runtime.state import BridgeRuntimeState, PendingRequest
+from .server_chat.service import ServerChatService
 from .transport import AioHttpWebSocketBridgeTransport
 from .utils import first_non_blank
 
@@ -18,6 +19,7 @@ class MaidBridgeConnection:
         _transport: AioHttpWebSocketBridgeTransport | None
         _router: RuntimeRouter | None
         _maid_turn_service: MaidTurnService | None
+        _server_chat_service: ServerChatService | None
         _runtime_task: asyncio.Task[None] | None
         _runtime_stop_event: asyncio.Event | None
         _runtime_closed_event: asyncio.Event | None
@@ -118,11 +120,12 @@ class MaidBridgeConnection:
         bot_name = await self._resolve_bot_name(settings)
         self._bot_name = bot_name
         maid_uuid = first_non_blank(settings.maid_uuid)
-        if not maid_uuid:
-            raise RuntimeError("女仆接管必须填写女仆 UUID")
+        if settings.enable_maid_agent_turns and not maid_uuid:
+            self.ctx.logger.warning("女仆接管已启用但未填写女仆 UUID，本次连接只启用不依赖女仆实体的链路")
+        maid_turns_enabled = settings.enable_maid_agent_turns and bool(maid_uuid)
         self.ctx.logger.info(
             f"MaidBridge 正在连接 [url={settings.websocket_url}, maid_uuid={maid_uuid}, "
-            f"agent_id={settings.agent_id}, agent_name={bot_name}, maid_turns={settings.enable_maid_agent_turns}]"
+            f"agent_id={settings.agent_id}, agent_name={bot_name}, maid_turns={maid_turns_enabled}]"
         )
 
         transport = AioHttpWebSocketBridgeTransport(
@@ -138,8 +141,13 @@ class MaidBridgeConnection:
                 send_frame=self._send_frame,
                 bot_name=bot_name,
             )
-            if settings.enable_maid_agent_turns
+            if maid_turns_enabled
             else None
+        )
+        server_chat_handler = ServerChatService(
+            ctx=self.ctx,
+            settings=settings,
+            bot_name=bot_name,
         )
         router = RuntimeRouter(
             ctx=self.ctx,
@@ -147,11 +155,13 @@ class MaidBridgeConnection:
             state=self._state,
             max_message_bytes=settings.max_message_bytes,
             maid_turn_handler=maid_turn_handler,
+            server_chat_handler=server_chat_handler,
         )
 
         self._transport = transport
         self._router = router
         self._maid_turn_service = maid_turn_handler
+        self._server_chat_service = server_chat_handler
         await router.start()
         await self._send_session_initialize(settings)
 
@@ -185,6 +195,7 @@ class MaidBridgeConnection:
         self._router = None
         self._transport = None
         self._maid_turn_service = None
+        self._server_chat_service = None
 
         if service is not None:
             service.cancel_pending(error or "MaidBridge 传输层已关闭")
@@ -313,9 +324,24 @@ class MaidBridgeConnection:
         settings = self._settings()
         await self.ctx.gateway.update_state(
             ADAPTER_STATE_NAME,
-            ready=runtime_connected,
+            ready=runtime_connected and settings.enable_maid_agent_turns and bool(settings.maid_uuid),
             platform=PLATFORM,
             account_id=settings.maid_uuid,
+            scope="",
+            metadata={
+                "protocol": PROTOCOL,
+                "server_id": settings.server_id,
+                "websocket_role": WEBSOCKET_ROLE,
+                "websocket_url": settings.websocket_url,
+                "reconnect_attempts": self._reconnect_attempts,
+                **metadata,
+            },
+        )
+        await self.ctx.gateway.update_state(
+            SERVER_CHAT_GATEWAY_NAME,
+            ready=runtime_connected,
+            platform=PLATFORM,
+            account_id=settings.server_id,
             scope="",
             metadata={
                 "protocol": PROTOCOL,

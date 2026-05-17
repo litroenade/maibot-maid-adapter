@@ -2,11 +2,12 @@ from typing import ClassVar
 
 from maibot_sdk import Field, PluginConfigBase
 
-SUPPORTED_CONFIG_VERSION = "0.3.10"
+SUPPORTED_CONFIG_VERSION = "0.3.11"
 DEFAULT_SERVER_ID = "minecraft-local"
 DEFAULT_AGENT_ID = "麦麦"
 DEFAULT_JAVA_SERVER_URI = "ws://127.0.0.1:8765/maidbridge"
 DEFAULT_CLIENT_ROLES = ["maid_api_query", "maid_api_call", "debug"]
+SERVER_CHAT_CLIENT_ROLE = "message"
 DEFAULT_SUBSCRIPTIONS = [
     "maid.ai.*",
     "maid.api.registry.*",
@@ -66,10 +67,10 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
     )
     server_id: str = Field(
         default=DEFAULT_SERVER_ID,
-        description="MaiBot 侧用于区分 Minecraft 聊天会话的标识符。",
+        description="MaiBot 侧用于区分这个 Minecraft 服务器的账号标识。",
         json_schema_extra={
-            "label": "聊天会话标识符",
-            "hint": "本地群聊名称前缀标识符，实际为server_id+maid_uuid",
+            "label": "服务器标识符",
+            "hint": "服务器群聊会用它作为 minecraft 平台账号；女仆接管仍用女仆 UUID 路由。",
             "order": 3,
             "placeholder": DEFAULT_SERVER_ID,
         },
@@ -78,8 +79,8 @@ class MaidAdapterConnectionConfig(PluginConfigBase):
         default=DEFAULT_AGENT_ID,
         description="外部接管方的稳定协议标识符。",
         json_schema_extra={
-            "label": "外部接管标识符",
-            "hint": "作为mc侧bot标识符以及显示名称，可能与实体名称有不同",
+            "label": "MaiBot 显示名称",
+            "hint": "Minecraft 里显示的外部发言人名称，可以和女仆实体名不同。",
             "order": 4,
             "placeholder": DEFAULT_AGENT_ID,
         },
@@ -201,15 +202,18 @@ class MaiBotMaidAdapterSettings(PluginConfigBase):
 
     @property
     def client_roles(self) -> list[str]:
-        if self.enable_maid_agent_turns:
-            return ["agent", *DEFAULT_CLIENT_ROLES]
-        return list(DEFAULT_CLIENT_ROLES)
+        roles = list(DEFAULT_CLIENT_ROLES)
+        roles.insert(0, SERVER_CHAT_CLIENT_ROLE)
+        if self.enable_maid_agent_turns and self.maid_uuid:
+            return ["agent", *roles]
+        return roles
 
     @property
     def subscriptions(self) -> list[str]:
-        if self.enable_maid_agent_turns:
-            return ["maid.agent.turn.request", *DEFAULT_SUBSCRIPTIONS]
-        return list(DEFAULT_SUBSCRIPTIONS)
+        subscriptions = list(DEFAULT_SUBSCRIPTIONS)
+        if self.enable_maid_agent_turns and self.maid_uuid:
+            return ["maid.agent.turn.request", *subscriptions]
+        return subscriptions
 
     @property
     def enable_maid_agent_turns(self) -> bool:

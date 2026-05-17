@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from ..constants import SERVER_CHAT_MESSAGE_TYPE, SERVER_CHAT_RESPONSE_TYPE
 from . import query_api
 from .frame import BridgeFrame
 
@@ -50,10 +51,14 @@ def route_frame(
         return _route_session_ready(frame)
     if frame.type == "maid.api.response":
         return _route_domain_response(frame, "api_response")
+    if frame.type == SERVER_CHAT_RESPONSE_TYPE:
+        return _route_domain_response(frame, "server_chat_response")
     if frame.type == "bridge.error":
         return _route_domain_response(frame, "bridge_error")
     if frame.type == "maid.agent.turn.request":
         return _route_maid_turn(frame)
+    if frame.type == SERVER_CHAT_MESSAGE_TYPE:
+        return _route_server_chat(frame)
     if frame.type in _AI_CHAIN_EVENTS or frame.type.startswith(_SERVER_EVENT_PREFIX):
         direction_error = _java_to_client_error(frame)
         if direction_error is not None:
@@ -170,6 +175,19 @@ def _route_maid_turn(frame: BridgeFrame) -> RouteDecision:
             "turn_id": turn_id,
             "message": message,
             "maid": {"uuid": maid_uuid},
+        },
+    )
+
+
+def _route_server_chat(frame: BridgeFrame) -> RouteDecision:
+    direction_error = _java_to_client_error(frame)
+    if direction_error is not None:
+        return direction_error
+    return RouteDecision(
+        kind="server_chat",
+        payload={
+            "accepted": frame.type,
+            "request_id": frame.request_id,
         },
     )
 

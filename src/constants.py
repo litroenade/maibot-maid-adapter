@@ -1,4 +1,5 @@
 ADAPTER_STATE_NAME = "maidbridge"
+SERVER_CHAT_GATEWAY_NAME = "maidbridge_server_chat"
 PLATFORM = "minecraft"
 PROTOCOL = "maidbridge.maid"
 CLIENT_TO_JAVA = "client_to_java"
@@ -8,6 +9,8 @@ DEFAULT_CLIENT_ENDPOINT_ID = "maidbridge-adapter"
 DEFAULT_JAVA_ENDPOINT_ID = "maidbridge-java"
 CAPABILITY_EXTERNAL_AGENT_EMOJI = "external_agent_emoji"
 MAIBOT_REPLYER_TASK = "replyer"
+SERVER_CHAT_MESSAGE_TYPE = "maidbridge.server.chat.message"
+SERVER_CHAT_RESPONSE_TYPE = "maidbridge.server.chat.response"
 
 DEFAULT_DEADLINE_MS = 30_000
 DEFAULT_MAX_MESSAGE_BYTES = 32 * 1024 * 1024

@@ -11,9 +11,18 @@ from .src.maid_turn.hooks import MaidPlannerHooks
 from .src.maid_turn.outbound_gateway import MaidGateway
 from .src.runtime.runtime_router import RuntimeRouter
 from .src.runtime.state import BridgeRuntimeState
+from .src.server_chat import ServerChatGateway, ServerChatPlannerHooks, ServerChatService
 
 
-class MaiBotMaidAdapterPlugin(MaidPlannerHooks, MaidGateway, MaidApi, MaidBridgeConnection, MaiBotPlugin):
+class MaiBotMaidAdapterPlugin(
+    MaidPlannerHooks,
+    MaidGateway,
+    ServerChatPlannerHooks,
+    ServerChatGateway,
+    MaidApi,
+    MaidBridgeConnection,
+    MaiBotPlugin,
+):
     config_model: ClassVar[type[PluginConfigBase] | None] = MaiBotMaidAdapterSettings
     config_reload_subscriptions: ClassVar[Iterable[str]] = (ON_BOT_CONFIG_RELOAD,)
 
@@ -23,6 +32,7 @@ class MaiBotMaidAdapterPlugin(MaidPlannerHooks, MaidGateway, MaidApi, MaidBridge
         self._transport: Any | None = None
         self._router: RuntimeRouter | None = None
         self._maid_turn_service: Any | None = None
+        self._server_chat_service: Any | None = None
         self._runtime_task: asyncio.Task[None] | None = None
         self._runtime_stop_event: asyncio.Event | None = None
         self._runtime_closed_event: asyncio.Event | None = None
